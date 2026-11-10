@@ -89,19 +89,16 @@
 
 ## Not done / caveats
 
+_Written at the merge (2026-11-09). Items done since have been removed; the README's "Known caveats" is the current list._
+
 - Real drag-and-drop, the file/folder/mode/zip pickers, Save, Save As and Discard changes
   weren't exercised headlessly (portals, no XDND source). The drop handler calls the same
   `Editor::import_paths` the debug hook does.
 - Adding a mode through the UI wasn't exercised (picker); `Session::add_mode` is tested.
-- Save / Close don't first commit a field that still has focus (design/editor-model.md, section
-  5): a pending edit lands when the field loses focus. Worth a `commit_focused` hook in the shell.
 - Ctrl+Z inside a focused text field is the field's own undo, not the pack's.
-- The Tauri editor's editable pack title in the toolbar isn't ported; the name is edited in
-  Metadata.
 - The import window doesn't linger for 3 s after a clean import as Tauri's did; it disappears when
-  there's nothing to report. It isn't draggable.
+  there's nothing to report.
 - The Edgeware `icon.ico` is ignored, as in Tauri.
-- README "Status"/"Known caveats" still say imports aren't ported; update when merging.
 
 ## Changes outside owned files
 

@@ -241,6 +241,8 @@ pub struct MonitorsPage {
     /// The zoomed-in screen's on-screen box, captured at paint for the drag maths.
     screen_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     fields: [(Edge, &'static str, Entity<InputState>); 4],
+    /// The percentage field with focus, for its border.
+    focused_input: Option<gpui_kit::EntityId>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -257,6 +259,12 @@ impl MonitorsPage {
         let mut subscriptions = vec![cx.observe(&store, |_, _, cx| cx.notify())];
         for (edge, _, state) in &fields {
             let edge = *edge;
+            subscriptions.extend(ui::track_focused_input(
+                state,
+                |this: &mut Self| &mut this.focused_input,
+                window,
+                cx,
+            ));
             subscriptions.push(cx.subscribe_in(
                 state,
                 window,
@@ -280,6 +288,7 @@ impl MonitorsPage {
             drag: None,
             screen_bounds: Rc::new(Cell::new(None)),
             fields,
+            focused_input: None,
             _subscriptions: subscriptions,
         }
     }
@@ -705,7 +714,7 @@ impl MonitorsPage {
     fn editor_panel(&self, monitor: &MonitorInfo, cx: &mut Context<Self>) -> AnyElement {
         let region = self.region_of(monitor, cx);
         let summary = if region.is_full() {
-            format!("whole screen · {}", logical_size(monitor, &region))
+            format!("whole screen, {}", logical_size(monitor, &region))
         } else {
             format!(
                 "{} at {}%, {}%",
@@ -754,7 +763,9 @@ impl MonitorsPage {
                         .gap_1()
                         .rounded(theme::RADIUS_MD)
                         .border_1()
-                        .border_color(c(theme::BORDER_STRONG))
+                        .border_color(ui::field_border(
+                            self.focused_input == Some(state.entity_id()),
+                        ))
                         .bg(c(theme::BG))
                         .child(
                             Input::new(state)
@@ -975,11 +986,6 @@ impl Render for MonitorsPage {
                 .into_any_element()
         };
 
-        ui::page(
-            "monitors",
-            "Monitors",
-            "Choose which screens popup windows may use, and how much of each one. Drag out an area on a screen to keep popups inside it; the rest of that screen is left alone.",
-            [body],
-        )
+        ui::page("monitors", "Monitors", "", [body])
     }
 }

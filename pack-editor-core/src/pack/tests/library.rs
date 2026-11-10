@@ -100,8 +100,12 @@ fn file(id: u64, kind: &str, name: &str, size: u64, tags: &[&str]) -> MediaFile 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn removing_files_is_one_undoable_edit() {
-    let (_dir, mut session, ids) =
-        session_with(&[("image", "a.webp"), ("image", "b.webp"), ("image", "c.webp")]).await;
+    let (_dir, mut session, ids) = session_with(&[
+        ("image", "a.webp"),
+        ("image", "b.webp"),
+        ("image", "c.webp"),
+    ])
+    .await;
 
     let applied = session.remove_files(&ids[..2]).unwrap();
     assert!(applied.changes.scopes.contains(Scope::Media));
@@ -126,9 +130,12 @@ async fn removing_the_wallpaper_empties_its_slot_and_undo_restores_both() {
     let (_dir, mut session, ids) = session_with(&[("image", "wall.webp")]).await;
     let id = ids[0];
     session
-        .edit(BehaviourAction::new("Set wallpaper", move |tx: &Transaction<'_>| {
-            behaviour_editor::set_media_slot(tx, &MediaSlot::Wallpaper, Some(id))
-        }))
+        .edit(BehaviourAction::new(
+            "Set wallpaper",
+            move |tx: &Transaction<'_>| {
+                behaviour_editor::set_media_slot(tx, &MediaSlot::Wallpaper, Some(id))
+            },
+        ))
         .unwrap();
     assert_eq!(session.media_usage(id).unwrap().len(), 1);
     assert_eq!(session.media_usage(id).unwrap()[0].label, "Wallpaper");
@@ -144,8 +151,7 @@ async fn removing_the_wallpaper_empties_its_slot_and_undo_restores_both() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn renaming_a_file_refuses_a_taken_name() {
-    let (_dir, mut session, ids) =
-        session_with(&[("image", "a.webp"), ("image", "b.webp")]).await;
+    let (_dir, mut session, ids) = session_with(&[("image", "a.webp"), ("image", "b.webp")]).await;
 
     let applied = session.rename_file(ids[0], "  first.webp ").unwrap();
     assert_eq!(applied.changes.media.updated, vec![ids[0]]);
@@ -199,12 +205,8 @@ async fn audio_volume_is_an_attribute_and_full_means_no_opinion() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tag_and_artist_rows_count_visible_files_and_hide_managed_tags() {
-    let (_dir, mut session, ids) = session_with(&[
-        ("image", "a.webp"),
-        ("image", "b.webp"),
-        ("audio", "c.ogg"),
-    ])
-    .await;
+    let (_dir, mut session, ids) =
+        session_with(&[("image", "a.webp"), ("image", "b.webp"), ("audio", "c.ogg")]).await;
     session.add_tag_to_files(&ids, "red").unwrap();
     session.add_artist_to_files(&ids[..2], "Someone").unwrap();
     session.set_popup_audio(&[ids[2]], true).unwrap();
@@ -234,9 +236,7 @@ async fn tag_and_artist_rows_count_visible_files_and_hide_managed_tags() {
 #[tokio::test(flavor = "multi_thread")]
 async fn thumbnails_are_read_for_the_files_that_have_them() {
     let (_dir, session, ids) = session_with(&[("image", "a.webp"), ("audio", "b.ogg")]).await;
-    let thumbnails = session
-        .read(|c| ops::library::thumbnails(c, &ids))
-        .unwrap();
+    let thumbnails = session.read(|c| ops::library::thumbnails(c, &ids)).unwrap();
     assert_eq!(thumbnails.len(), 1);
     assert_eq!(thumbnails[0].0, ids[0]);
 }
@@ -244,19 +244,19 @@ async fn thumbnails_are_read_for_the_files_that_have_them() {
 // ── Filters and sorting ─────────────────────────────────────────────────────────────────────
 
 fn sample() -> Vec<MediaFile> {
-    let mut wallpaper = file(5, "image", "wallpaper.webp", 50, &[shared::tags::NON_POPUP_TAG]);
+    let mut wallpaper = file(
+        5,
+        "image",
+        "wallpaper.webp",
+        50,
+        &[shared::tags::NON_POPUP_TAG],
+    );
     wallpaper.popup_eligible = false;
     vec![
         file(1, "image", "file 10.webp", 300, &["red"]),
         file(2, "video", "File 9.mp4", 100, &["blue"]),
         file(3, "audio", "song.ogg", 200, &["red"]),
-        file(
-            4,
-            "audio",
-            "beep.ogg",
-            10,
-            &[shared::tags::POPUP_AUDIO_TAG],
-        ),
+        file(4, "audio", "beep.ogg", 10, &[shared::tags::POPUP_AUDIO_TAG]),
         wallpaper,
     ]
 }
@@ -322,7 +322,10 @@ fn sorting_by_name_is_natural_and_case_insensitive() {
         descending: true,
         ..Default::default()
     };
-    assert_eq!(by_size.apply(MediaTab::AllMedia, &files), vec![1, 3, 2, 5, 4]);
+    assert_eq!(
+        by_size.apply(MediaTab::AllMedia, &files),
+        vec![1, 3, 2, 5, 4]
+    );
     let newest = MediaFilter {
         descending: true,
         ..Default::default()
@@ -419,7 +422,13 @@ fn grid_steps() {
 #[test]
 fn label_summaries_split_shared_from_partial() {
     let files = [
-        file(1, "image", "a", 1, &["red", "blue", shared::tags::NON_POPUP_TAG]),
+        file(
+            1,
+            "image",
+            "a",
+            1,
+            &["red", "blue", shared::tags::NON_POPUP_TAG],
+        ),
         file(2, "image", "b", 1, &["red"]),
     ];
     let summary = LabelSummary::of(&files, LabelKind::Tags);
@@ -428,4 +437,83 @@ fn label_summaries_split_shared_from_partial() {
     assert_eq!(label_edit_count(&files, LabelKind::Tags, "blue", true), 1);
     assert_eq!(label_edit_count(&files, LabelKind::Tags, "red", true), 0);
     assert_eq!(label_edit_count(&files, LabelKind::Tags, "red", false), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_attributes_store_only_opinions() {
+    use shared::behaviour::{MonitorPreference, SpawnRegion};
+    let (_dir, mut session, ids) = session_with(&[("image", "a.webp"), ("video", "b.webm")]).await;
+    let attributes = |session: &Session, id: u64| {
+        session
+            .popup_attributes(&[id])
+            .unwrap()
+            .into_iter()
+            .next()
+            .map(|(_, attributes)| attributes)
+            .unwrap_or_default()
+    };
+
+    let applied = session.set_popup_scale(&ids, Some(1.5), "Size").unwrap();
+    assert!(applied.changes.scopes.contains(Scope::Attributes));
+    session
+        .set_popup_weight(&ids[..1], Some(2.0), "Weight")
+        .unwrap();
+    let left = SpawnRegion {
+        x: 0.0,
+        y: 0.0,
+        width: 0.5,
+        height: 1.0,
+    };
+    session
+        .set_popup_region(&ids, Some(left), "Region")
+        .unwrap();
+    session
+        .set_popup_monitor(&ids, Some(MonitorPreference::Primary), "Monitor")
+        .unwrap();
+    session
+        .set_popup_caption(&ids[..1], Some("  hi  "), "Caption")
+        .unwrap();
+    session
+        .set_popup_video_loop(&ids[1..], false, "Loop")
+        .unwrap();
+    session
+        .set_popup_video_volume(&ids[1..], Some(0.5), "Volume")
+        .unwrap();
+
+    let a = attributes(&session, ids[0]);
+    assert_eq!(a.scale, Some(1.5));
+    assert_eq!(a.weight, Some(2.0));
+    assert_eq!(a.region, Some(left));
+    assert_eq!(a.monitor, Some(MonitorPreference::Primary));
+    assert_eq!(a.caption.as_deref(), Some("hi"));
+    let b = attributes(&session, ids[1]);
+    assert_eq!(b.video_loop, Some(false));
+    assert_eq!(b.video_volume, Some(0.5));
+    assert_eq!(b.weight, None);
+
+    // Defaults are "no opinion", stored as nothing.
+    session.set_popup_scale(&ids, Some(1.0), "Size").unwrap();
+    session
+        .set_popup_region(&ids, Some(SpawnRegion::FULL), "Region")
+        .unwrap();
+    session
+        .set_popup_monitor(&ids, Some(MonitorPreference::Any), "Monitor")
+        .unwrap();
+    session
+        .set_popup_caption(&ids, Some(" "), "Caption")
+        .unwrap();
+    session.set_popup_video_loop(&ids, true, "Loop").unwrap();
+    session
+        .set_popup_video_volume(&ids, Some(1.0), "Volume")
+        .unwrap();
+    let a = attributes(&session, ids[0]);
+    assert_eq!(
+        (a.scale, a.region, a.monitor, a.caption),
+        (None, None, None, None)
+    );
+    let b = attributes(&session, ids[1]);
+    assert_eq!((b.video_loop, b.video_volume), (None, None));
+
+    session.undo().unwrap();
+    assert_eq!(attributes(&session, ids[1]).video_volume, Some(0.5));
 }

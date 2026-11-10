@@ -3,9 +3,10 @@
 //! scrolling); these are the pieces whose look is specific enough to be worth owning.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, App, ClickEvent, ElementId, FontWeight, SharedString, Window};
+use gpui_kit::{div, px, App, ClickEvent, ElementId, FontWeight, Pixels, SharedString, Window};
 
 use crate::icons::icon;
 use crate::theme::{self, c};
@@ -173,7 +174,7 @@ impl RenderOnce for Button {
 pub struct IconButton {
     id: ElementId,
     icon: IconName,
-    tooltip: SharedString,
+    tooltip: Option<SharedString>,
     disabled: bool,
     on_click: Option<ClickHandler>,
 }
@@ -183,7 +184,7 @@ impl IconButton {
         Self {
             id: id.into(),
             icon,
-            tooltip: tooltip.into(),
+            tooltip: Some(tooltip.into()),
             disabled: false,
             on_click: None,
         }
@@ -191,6 +192,12 @@ impl IconButton {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// No tooltip: what it opens (a menu) is showing.
+    pub fn without_tooltip(mut self) -> Self {
+        self.tooltip = None;
         self
     }
 
@@ -216,7 +223,9 @@ impl RenderOnce for IconButton {
             .rounded(theme::RADIUS_MD)
             .text_color(c(theme::MUTED))
             .child(icon(self.icon).size(px(16.)))
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .when_some(tooltip, |this, tooltip| {
+                this.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            })
             .when(self.disabled, |this| this.opacity(0.45))
             .when(!self.disabled, |this| {
                 this.cursor_pointer()
@@ -288,9 +297,12 @@ impl RenderOnce for NavItem {
                     this.bg(c(theme::SURFACE_RAISED)).text_color(c(theme::TEXT))
                 } else {
                     this.text_color(c(theme::MUTED))
-                        .hover(|style| style.text_color(c(theme::TEXT)))
                 }
             })
+            // On the active row too, where it changes nothing: gpui only tracks hover on an
+            // element with a hover style, so a row clicked while hovered would otherwise come
+            // back from being active still drawn hovered, until the pointer next moved.
+            .hover(|style| style.text_color(c(theme::TEXT)))
             .children(self.icon.map(|name| icon(name).size(px(15.))))
             .child(div().min_w_0().truncate().child(self.label))
             .when_some(self.on_click, |this, handler| {
@@ -366,17 +378,22 @@ pub fn page_body(
     id: &'static str,
     sections: impl IntoIterator<Item = gpui_kit::AnyElement>,
 ) -> impl IntoElement {
-    div().id(id).flex_1().min_h_0().overflow_y_scroll().child(
-        div()
-            .mx_auto()
-            .w_full()
-            .max_w(px(896.))
-            .p_8()
-            .flex()
-            .flex_col()
-            .gap_6()
-            .children(sections),
-    )
+    div()
+        .id(id)
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scrollbar()
+        .child(
+            div()
+                .mx_auto()
+                .w_full()
+                .max_w(px(896.))
+                .p_8()
+                .flex()
+                .flex_col()
+                .gap_6()
+                .children(sections),
+        )
 }
 
 pub fn page(
@@ -385,26 +402,33 @@ pub fn page(
     lede: &'static str,
     sections: impl IntoIterator<Item = gpui_kit::AnyElement>,
 ) -> impl IntoElement {
-    div().id(id).flex_1().min_h_0().overflow_y_scroll().child(
-        div()
-            .mx_auto()
-            .w_full()
-            .max_w(px(896.))
-            .p_8()
-            .flex()
-            .flex_col()
-            .gap_6()
-            .child(
-                div()
-                    .max_w(px(672.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .child(page_title(title))
-                    .child(hint(lede).text_size(px(13.))),
-            )
-            .children(sections),
-    )
+    div()
+        .id(id)
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scrollbar()
+        .child(
+            div()
+                .mx_auto()
+                .w_full()
+                .max_w(px(896.))
+                .p_8()
+                .flex()
+                .flex_col()
+                .gap_6()
+                .child(
+                    div()
+                        .max_w(px(672.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(page_title(title))
+                        .when(!lede.is_empty(), |this| {
+                            this.child(hint(lede).text_size(px(13.)))
+                        }),
+                )
+                .children(sections),
+        )
 }
 
 type ToggleHandler = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
@@ -513,19 +537,24 @@ pub fn radio_group<T: PartialEq + Clone + 'static>(
     div()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap_1()
         .children(options.into_iter().enumerate().map(move |(index, option)| {
             let checked = &option.value == selected;
             let on_change = on_change.clone();
             let value = option.value.clone();
             div()
                 .id((id, index))
+                .w_full()
+                .min_h(theme::CONTROL_NORMAL)
+                .px_3()
+                .py_2()
                 .flex()
-                .items_start()
+                .items_center()
                 .gap_3()
+                .rounded(theme::RADIUS_MD)
+                .when(checked, |this| this.bg(c(theme::SURFACE_RAISED)))
                 .child(
                     div()
-                        .mt(px(1.))
                         .size(px(16.))
                         .flex_none()
                         .rounded_full()
@@ -535,20 +564,28 @@ pub fn radio_group<T: PartialEq + Clone + 'static>(
                         } else {
                             theme::BORDER_STRONG
                         }))
-                        .bg(c(theme::BG))
+                        .bg(c(if checked { theme::ACCENT } else { theme::BG }))
                         .flex()
                         .items_center()
                         .justify_center()
+                        .text_color(gpui_kit::white())
                         .when(checked, |this| {
-                            this.child(div().size(px(8.)).rounded_full().bg(c(theme::ACCENT)))
+                            this.child(icon(IconName::Check).size(px(10.)))
                         }),
                 )
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(2.))
-                        .child(div().text_size(px(13.)).child(option.label))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .when(checked, |this| this.font_weight(FontWeight::MEDIUM))
+                                .child(option.label),
+                        )
                         .when_some(option.description, |this, description| {
                             this.child(hint(description))
                         }),
@@ -556,6 +593,7 @@ pub fn radio_group<T: PartialEq + Clone + 'static>(
                 .when(option.disabled, |this| this.opacity(0.45))
                 .when(!option.disabled && !checked, |this| {
                     this.cursor_pointer()
+                        .hover(|style| style.bg(c(theme::SURFACE_RAISED)))
                         .on_click(move |_, window, cx| on_change(value.clone(), window, cx))
                 })
         }))
@@ -653,10 +691,14 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
                     .child(current),
             )
             .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(c(theme::MUTED))
-                    .child(if open { "▲" } else { "▼" }),
+                div().flex_none().text_color(c(theme::MUTED)).child(
+                    icon(if open {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    })
+                    .size(px(14.)),
+                ),
             )
             .when(self.disabled, |this| this.opacity(0.45))
             .when(!self.disabled, |this| {
@@ -672,16 +714,22 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
 
         let menu = open.then(|| {
             let close_state = open_state.clone();
-            gpui_kit::deferred(
+            // Positioned and framed by an outer box, scrolled by an inner one: the scrollbar
+            // wrapper keeps the caller's size but not its position, so on a single element the
+            // menu would lose `absolute` and collapse into the trigger's flow.
+            let list = div()
+                .id("menu-list")
+                .max_h(px(280.))
+                .p_1()
+                .overflow_y_scrollbar();
+            let menu = gpui_kit::deferred(
                 div()
                     .id("menu")
+                    .occlude()
                     .absolute()
                     .top(theme::CONTROL_NORMAL + px(4.))
                     .left_0()
                     .right_0()
-                    .max_h(px(280.))
-                    .overflow_y_scroll()
-                    .p_1()
                     .rounded(theme::RADIUS_MD)
                     .border_1()
                     .border_color(c(theme::BORDER_STRONG))
@@ -693,48 +741,51 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
                         spread_radius: px(0.),
                         inset: false,
                     }])
-                    .on_mouse_down_out(move |_, _, cx| {
-                        close_state.update(cx, |open, cx| {
-                            *open = false;
-                            cx.notify();
-                        })
-                    })
-                    .children(self.options.into_iter().enumerate().map(|(index, option)| {
-                        let selected = option.value == self.selected;
-                        let on_change = self.on_change.clone();
-                        let open_state = open_state.clone();
-                        let value = option.value;
-                        div()
-                            .id(index)
-                            .px_2()
-                            .py(px(6.))
-                            .rounded(theme::RADIUS_SM)
-                            .text_size(px(13.))
-                            .truncate()
-                            .border_l_2()
-                            .border_color(if selected {
-                                c(theme::ACCENT_HOVER)
-                            } else {
-                                gpui_kit::transparent_black()
-                            })
-                            .child(option.label)
-                            .when(option.disabled, |this| this.text_color(c(theme::MUTED)))
-                            .when(!option.disabled, |this| {
-                                this.cursor_pointer()
-                                    .hover(|style| style.bg(c(theme::SURFACE)))
-                                    .on_click(move |_, window, cx| {
-                                        open_state.update(cx, |open, cx| {
-                                            *open = false;
-                                            cx.notify();
-                                        });
-                                        if let Some(on_change) = &on_change {
-                                            on_change(value.clone(), window, cx);
-                                        }
-                                    })
-                            })
-                    })),
+                    .child(list.children(self.options.into_iter().enumerate().map(
+                        |(index, option)| {
+                            let selected = option.value == self.selected;
+                            let on_change = self.on_change.clone();
+                            let open_state = open_state.clone();
+                            let value = option.value;
+                            div()
+                                .id(index)
+                                .px_2()
+                                .py(px(6.))
+                                .rounded(theme::RADIUS_SM)
+                                .text_size(px(13.))
+                                .truncate()
+                                .border_l_2()
+                                .border_color(if selected {
+                                    c(theme::ACCENT_HOVER)
+                                } else {
+                                    gpui_kit::transparent_black()
+                                })
+                                .child(option.label)
+                                .when(option.disabled, |this| this.text_color(c(theme::MUTED)))
+                                .when(!option.disabled, |this| {
+                                    this.cursor_pointer()
+                                        .hover(|style| style.bg(c(theme::SURFACE)))
+                                        .on_click(move |_, window, cx| {
+                                            open_state.update(cx, |open, cx| {
+                                                *open = false;
+                                                cx.notify();
+                                            });
+                                            if let Some(on_change) = &on_change {
+                                                on_change(value.clone(), window, cx);
+                                            }
+                                        })
+                                })
+                        },
+                    ))),
             )
-            .with_priority(1)
+            .with_priority(POPOVER_PRIORITY);
+            let backdrop = dismiss_layer("select-backdrop", window, move |_, cx| {
+                close_state.update(cx, |open, cx| {
+                    *open = false;
+                    cx.notify();
+                })
+            });
+            [backdrop.into_any_element(), menu.into_any_element()]
         });
 
         div()
@@ -743,8 +794,183 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
             .flex_1()
             .min_w_0()
             .child(trigger)
-            .children(menu)
+            .children(menu.into_iter().flatten())
     }
+}
+
+/// Redraws the view when `input` gains or loses focus, so a field box around it can light its
+/// border: focusing an input redraws the input, not the view that draws the box. gpui's own focus
+/// events, which (unlike gpui-component's `InputEvent::Blur`) always arrive.
+pub fn track_focus_of<T: 'static, E: gpui_kit::Focusable>(
+    input: &gpui_kit::Entity<E>,
+    window: &mut Window,
+    cx: &mut gpui_kit::Context<T>,
+) -> [gpui_kit::Subscription; 2] {
+    let handle = input.read(cx).focus_handle(cx);
+    [
+        cx.on_focus(&handle, window, |_, _, cx| cx.notify()),
+        cx.on_blur(&handle, window, |_, _, cx| cx.notify()),
+    ]
+}
+
+/// Keeps the view's `slot` naming `input` while it has focus, and redraws the view on each change,
+/// so a field box drawn around it can light its border without needing the `Window` at render
+/// time. Blur only clears the slot if it still names this input, so the order the old field's
+/// blur and the new one's focus arrive in doesn't matter.
+pub fn track_focused_input<T: 'static, E: gpui_kit::Focusable>(
+    input: &gpui_kit::Entity<E>,
+    slot: fn(&mut T) -> &mut Option<gpui_kit::EntityId>,
+    window: &mut Window,
+    cx: &mut gpui_kit::Context<T>,
+) -> [gpui_kit::Subscription; 2] {
+    let handle = input.read(cx).focus_handle(cx);
+    let id = input.entity_id();
+    [
+        cx.on_focus(&handle, window, move |this, _, cx| {
+            *slot(this) = Some(id);
+            cx.notify();
+        }),
+        cx.on_blur(&handle, window, move |this, _, cx| {
+            let focused = slot(this);
+            if *focused == Some(id) {
+                *focused = None;
+            }
+            cx.notify();
+        }),
+    ]
+}
+
+/// The border of a box drawn around a text input: lit while the input has focus.
+pub fn field_border(focused: bool) -> gpui_kit::Hsla {
+    c(if focused {
+        theme::FOCUS
+    } else {
+        theme::BORDER_STRONG
+    })
+}
+
+/// A search box: a magnifier, then the input, the border lit while it has focus. Size it (`w`)
+/// at the call site.
+pub fn search_field(
+    input: &gpui_kit::Entity<gpui_kit::component::input::InputState>,
+    focused: bool,
+) -> gpui_kit::Div {
+    div()
+        .h(theme::CONTROL_COMPACT)
+        .pl_2()
+        .flex()
+        .items_center()
+        .rounded(theme::RADIUS_MD)
+        .border_1()
+        .border_color(c(if focused {
+            theme::FOCUS
+        } else {
+            theme::BORDER_STRONG
+        }))
+        .bg(c(theme::BG))
+        .child(
+            div()
+                .flex_none()
+                .text_color(c(theme::MUTED))
+                .child(icon(IconName::Search).size(px(14.))),
+        )
+        .child(
+            gpui_kit::component::input::Input::new(input)
+                .appearance(false)
+                .text_size(px(12.))
+                .flex_1(),
+        )
+}
+
+/// The horizontal padding gpui-component puts inside an input even with its frame off. A box
+/// drawn around an input adds none of its own, so the text sits where a label above it starts
+/// plus this.
+pub const INPUT_PAD: gpui_kit::Pixels = px(10.);
+
+/// Deferred priorities for floating layers. Popovers go above the media viewer (which is drawn at
+/// 2), so a dropdown opened from the viewer's rail isn't hidden behind it.
+pub const POPOVER_BACKDROP_PRIORITY: usize = 10;
+pub const POPOVER_PRIORITY: usize = 11;
+/// Dialogs are modal: above everything, an open popover included.
+pub const DIALOG_PRIORITY: usize = 20;
+
+/// The box a popover's content sits in: raised, bordered, with the hard offset shadow. Takes
+/// presses itself, so a click in it doesn't fall through to the [`dismiss_layer`] under it.
+pub fn popover_surface() -> gpui_kit::Div {
+    div()
+        .occlude()
+        .rounded(theme::RADIUS_MD)
+        .border_1()
+        .border_color(c(theme::BORDER_STRONG))
+        .bg(c(theme::SURFACE_RAISED))
+        .shadow(vec![gpui_kit::BoxShadow {
+            color: theme::shadow_pop(),
+            offset: gpui_kit::point(px(4.), px(4.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+}
+
+/// Floats `content` over the page, `top` below the top of the element this is a child of (which
+/// must be `.relative()`), lined up with its left edge, or its right with `align_right`. It takes
+/// no room in the layout and draws above everything but dialogs. Where there's no room for it
+/// below, it opens above the element instead, and it's kept inside the window either way.
+pub fn floating(
+    top: gpui_kit::Pixels,
+    align_right: bool,
+    content: impl IntoElement,
+) -> gpui_kit::Div {
+    // The gap between the element and the layer, as padding: the layer is anchored at the
+    // element's top and pushed down, so flipping it puts its bottom at the element's top, and
+    // the padding keeps the same gap there. It's not part of the surface, so a press in it
+    // still lands on the dismiss layer.
+    const GAP: f32 = 4.;
+    let layer = gpui_kit::anchored()
+        .anchor(if align_right {
+            gpui_kit::Anchor::TopRight
+        } else {
+            gpui_kit::Anchor::TopLeft
+        })
+        .offset(gpui_kit::point(px(0.), top - px(GAP)))
+        .child(div().py(px(GAP)).child(content));
+    div()
+        .absolute()
+        .top_0()
+        .map(|this| {
+            if align_right {
+                this.right_0()
+            } else {
+                this.left_0()
+            }
+        })
+        .child(gpui_kit::deferred(layer).with_priority(POPOVER_PRIORITY))
+}
+
+/// An invisible layer over the whole window, under an open popover: a press anywhere else lands
+/// on it and closes the popover. Including the popover's own trigger, so a second click on the
+/// trigger closes it rather than closing it on press and reopening it on release.
+pub fn dismiss_layer(
+    id: &'static str,
+    window: &Window,
+    on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let viewport = window.viewport_size();
+    gpui_kit::deferred(
+        gpui_kit::anchored()
+            .position(gpui_kit::point(px(0.), px(0.)))
+            .child(
+                div()
+                    .id(id)
+                    .block_mouse_except_scroll()
+                    .w(viewport.width)
+                    .h(viewport.height)
+                    .on_mouse_down(gpui_kit::MouseButton::Left, move |_, window, cx| {
+                        on_dismiss(window, cx)
+                    }),
+            ),
+    )
+    .with_priority(POPOVER_BACKDROP_PRIORITY)
 }
 
 /// `shared-ui/Checkbox.svelte`: the box fills with the accent when checked.
@@ -803,12 +1029,45 @@ pub fn dialog(
     focus: &gpui_kit::FocusHandle,
     window: &mut Window,
 ) -> impl IntoElement {
+    let body =
+        div()
+            .p_4()
+            .flex()
+            .flex_col()
+            .child(hint(description).text_size(px(13.)).mb(px(18.)))
+            .child(div().flex().justify_end().gap_2().children(
+                actions.into_iter().enumerate().map(|(index, action)| {
+                    let on_click = action.on_click;
+                    Button::new(("dialog-action", index), action.label)
+                        .variant(action.variant)
+                        .size(Size::Compact)
+                        .on_click(move |event, window, cx| on_click(event, window, cx))
+                }),
+            ));
+    dialog_window(title, px(400.), body, on_close, focus, window)
+}
+
+/// The width a [`dialog_window`] of `width` actually gets in this window: it keeps a margin.
+pub fn dialog_width(width: Pixels, window: &Window) -> Pixels {
+    width.min(window.viewport_size().width - px(48.))
+}
+
+/// The spawned-popup frame of [`dialog`] around any body: titlebar, hard shadow, echo frame,
+/// backdrop. `width` is the most it takes; see [`dialog_width`].
+pub fn dialog_window(
+    title: impl Into<SharedString>,
+    width: Pixels,
+    body: impl IntoElement,
+    on_close: impl Fn(&mut Window, &mut App) + 'static,
+    focus: &gpui_kit::FocusHandle,
+    window: &mut Window,
+) -> impl IntoElement {
     let on_close = std::rc::Rc::new(on_close);
     let viewport = window.viewport_size();
     let backdrop_close = on_close.clone();
     let button_close = on_close.clone();
     let key_close = on_close.clone();
-    let panel_width = px(400.).min(viewport.width - px(48.));
+    let panel_width = dialog_width(width, window);
 
     let panel = div()
         .id("dialog-panel")
@@ -877,22 +1136,7 @@ pub fn dialog(
                         .on_click(move |_, window, cx| button_close(window, cx)),
                 ),
         )
-        .child(
-            div()
-                .p_4()
-                .flex()
-                .flex_col()
-                .child(hint(description).text_size(px(13.)).mb(px(18.)))
-                .child(div().flex().justify_end().gap_2().children(
-                    actions.into_iter().enumerate().map(|(index, action)| {
-                        let on_click = action.on_click;
-                        Button::new(("dialog-action", index), action.label)
-                            .variant(action.variant)
-                            .size(Size::Compact)
-                            .on_click(move |event, window, cx| on_click(event, window, cx))
-                    }),
-                )),
-        );
+        .child(body);
 
     gpui_kit::deferred(
         gpui_kit::anchored()
@@ -936,5 +1180,92 @@ pub fn dialog(
                     ),
             ),
     )
-    .with_priority(2)
+    .with_priority(DIALOG_PRIORITY)
+}
+
+// ── Resizable sidebars ──────────────────────────────────────────────────────────────────────
+
+/// Which side of the window's content a [`resizable_sidebar`] sits on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// Every sidebar's dragged width, by id, so it survives the view being dropped and made again.
+#[derive(Default)]
+struct SidebarWidths(std::collections::HashMap<&'static str, Pixels>);
+
+impl gpui_kit::Global for SidebarWidths {}
+
+/// The payload of a sidebar's resize drag. It draws nothing: the sidebar itself follows it.
+#[derive(Clone)]
+struct ResizeSidebar(&'static str);
+
+impl gpui_kit::Render for ResizeSidebar {
+    fn render(&mut self, _: &mut Window, _: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+        gpui_kit::Empty
+    }
+}
+
+/// A sidebar `default` wide whose inner edge drags between `min` and `max` (double-click resets
+/// it). `content` fills it; the edge draws the dividing hairline, so `content` needs no border
+/// on that side. The width is remembered by `id` for as long as the app runs.
+pub fn resizable_sidebar(
+    id: &'static str,
+    side: Side,
+    default: Pixels,
+    (min, max): (Pixels, Pixels),
+    content: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
+    use gpui_kit::component::resizable::{resize_handle, HandleEdge};
+    use gpui_kit::component::InteractiveElementExt as _;
+
+    let width = cx
+        .try_global::<SidebarWidths>()
+        .and_then(|widths| widths.0.get(id).copied())
+        .unwrap_or(default)
+        .clamp(min, max);
+    let edge = match side {
+        Side::Left => HandleEdge::Trailing,
+        Side::Right => HandleEdge::Leading,
+    };
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .w(width)
+        .h_full()
+        .flex()
+        .child(div().flex_1().min_w_0().h_full().flex().child(content))
+        .child(
+            resize_handle::<ResizeSidebar, ResizeSidebar>(
+                SharedString::from(format!("{id}-edge")),
+                gpui_kit::Axis::Horizontal,
+            )
+            .inside(edge)
+            .on_drag(ResizeSidebar(id), |drag, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
+            })
+            .on_double_click(move |_, window, cx| {
+                cx.default_global::<SidebarWidths>().0.remove(id);
+                window.refresh();
+            }),
+        )
+        .on_drag_move::<ResizeSidebar>(move |event, window, cx| {
+            if event.drag(cx).0 != id {
+                return;
+            }
+            let x = event.event.position.x;
+            let width = match side {
+                Side::Left => x - event.bounds.left(),
+                Side::Right => event.bounds.right() - x,
+            };
+            cx.default_global::<SidebarWidths>()
+                .0
+                .insert(id, width.clamp(min, max));
+            window.refresh();
+        })
 }

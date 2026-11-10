@@ -26,6 +26,7 @@ pub use membership::{stage_membership, StageMembership};
 
 use std::collections::HashMap;
 
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, px, AnyElement, AnyView, App, Context, Entity, FocusHandle, FontWeight, SharedString,
@@ -37,6 +38,7 @@ use pack_editor_core::session::{Applied, Session};
 use shared::behaviour::editor as queries;
 use shared::behaviour::{Stage, Transition};
 
+use crate::views::media_slot::MediaSlotView;
 use crate::editor::{CommitPending, Editor, EditorEvent};
 use crate::shell::View;
 use crate::theme::{self, c};
@@ -126,12 +128,14 @@ pub struct TimelineView {
     /// The stage or transition being edited, by id. Falls back to the first stage.
     active: Option<String>,
     fields: HashMap<SharedString, fields::Field>,
-    picking: Option<widgets::Picking>,
+    /// The media slots of the stages shown so far, by `slot_key`.
+    slots: HashMap<String, Entity<MediaSlotView>>,
     removing: Option<Removing>,
     /// "Switch to a specific track" was chosen for this stage, and no track is picked yet.
     audio_picker_stage: Option<String>,
     _changes: Subscription,
     _commit: Subscription,
+    _slot_events: Vec<Subscription>,
 }
 
 impl TimelineView {
@@ -156,11 +160,12 @@ impl TimelineView {
             dialog_focus: cx.focus_handle(),
             active: None,
             fields: HashMap::new(),
-            picking: None,
+            slots: HashMap::new(),
             removing: None,
             audio_picker_stage: None,
             _changes,
             _commit,
+            _slot_events: Vec::new(),
         }
     }
 
@@ -176,7 +181,9 @@ impl TimelineView {
     fn select(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         // A field on the stage being left commits before it goes.
         self.commit_focused(window, cx);
-        self.picking = None;
+        for slot in self.slots.values() {
+            slot.update(cx, |slot, cx| slot.close_picker(cx));
+        }
         self.active = Some(id);
         cx.notify();
     }
@@ -324,11 +331,7 @@ impl TimelineView {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("Mode name"),
                 )
-                .child(self.field_box(&key, &input, None, window, cx).w(px(224.)))
-                .child(
-                    ui::hint("What players see this mode called. Blank keeps \"Sequence\".")
-                        .text_size(px(11.)),
-                );
+                .child(self.field_box(&key, &input, None, window, cx).w(px(224.)));
         }
         bar.child(div().flex_1()).child(toggle)
     }
@@ -394,23 +397,19 @@ impl TimelineView {
             .or(snapshot.stages.last())
             .map(|stage| stage.id.clone());
 
-        div()
-            .flex_none()
-            .w(px(200.))
-            .h_full()
+        let list = div()
+            .size_full()
             .p_3()
             .flex()
             .flex_col()
             .gap_3()
-            .border_r_1()
-            .border_color(c(theme::BORDER))
             .bg(c(theme::SURFACE))
             .child(
                 div()
                     .id("stage-list")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .child(div().flex().flex_col().gap(px(2.)).children(rows)),
             )
             .child(
@@ -421,8 +420,16 @@ impl TimelineView {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.add_stage(after.clone(), window, cx)
                     })),
-            )
-            .into_any_element()
+            );
+        ui::resizable_sidebar(
+            "stage-sidebar",
+            ui::Side::Left,
+            px(200.),
+            (px(160.), px(400.)),
+            list,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn stage_row(
@@ -474,18 +481,7 @@ impl TimelineView {
             }))
             .cursor_pointer()
             .hover(|style| style.bg(c(theme::SURFACE_RAISED)))
-            // Selection is an edge, not a fill.
-            .when(active, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.))
-                        .bg(c(theme::ACCENT_HOVER)),
-                )
-            })
+            // The active stage is a raised, filled row, like the sidebar's tabs (no edge).
             .child(
                 div()
                     .flex_none()
@@ -734,7 +730,7 @@ fn editor_panel(id: &str, children: Vec<AnyElement>) -> AnyElement {
         .flex_1()
         .min_w_0()
         .h_full()
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
         .child(
             div()
                 .mx_auto()

@@ -119,6 +119,12 @@ unshare --map-current-user --net env -u WAYLAND_DISPLAY \
 app_pid=$!
 sleep "$settle"
 kill -0 "$app_pid" 2>/dev/null || { echo "config-gpui exited early; see $out/app.log" >&2; exit 1; }
+# With no window manager nothing gives the window input focus, and gpui then treats it as
+# inactive: focus listeners see an empty focus path, so focus-dependent styling never shows.
+# Focus it the way a desktop would on launch.
+for wid in $(xdotool search --onlyvisible --name . 2>/dev/null); do
+    xdotool windowfocus "$wid" 2>/dev/null || true
+done
 
 while [[ $# -gt 0 ]]; do
     step=$1; shift

@@ -84,6 +84,21 @@ impl SafetyPage {
         })
         .detach();
 
+        let shortcut_store = store.clone();
+        cx.spawn(async move |_, cx| {
+            if let Err(error) =
+                runtime::run(shared::ipc::control::ensure_supervisor_running()).await
+            {
+                let _ = shortcut_store.update(cx, |store, cx| {
+                    store.stop_shortcut = Some(shared::ipc::control::StopShortcutStatus::Failed {
+                        message: format!("Couldn't check the stop shortcut: {error:#}"),
+                    });
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+
         Self {
             store,
             can_restore_original: None,
@@ -169,11 +184,117 @@ impl SafetyPage {
         .detach();
     }
 
+    fn setup_stop_shortcut(&mut self, retry: bool, _: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        cx.spawn(async move |_, cx| {
+            let result = runtime::run(async move {
+                shared::ipc::control::ensure_supervisor_running().await?;
+                let request = if retry {
+                    shared::ipc::control::Request::RefreshStopShortcut
+                } else {
+                    shared::ipc::control::Request::SetupStopShortcut
+                };
+                match shared::ipc::control::request(&request).await? {
+                    shared::ipc::control::Response::Ok => Ok(()),
+                    shared::ipc::control::Response::Error { message } => {
+                        Err(anyhow::anyhow!(message))
+                    }
+                    _ => Err(anyhow::anyhow!("Unexpected shortcut setup response")),
+                }
+            })
+            .await;
+            if let Err(error) = result {
+                let _ = store.update(cx, |store, cx| {
+                    store.set_feedback(
+                        "stop-shortcut",
+                        FeedbackKind::Error,
+                        format!("Couldn't set up desktop shortcut: {error}"),
+                    );
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Asks the desktop to show its own settings for the stop shortcut. The new key arrives as a
+    /// status update once the user changes it there.
+    fn configure_stop_shortcut(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        cx.spawn(async move |_, cx| {
+            let result = runtime::run(async move {
+                match shared::ipc::control::request(
+                    &shared::ipc::control::Request::ConfigureStopShortcut,
+                )
+                .await?
+                {
+                    shared::ipc::control::Response::Ok => Ok(()),
+                    shared::ipc::control::Response::Error { message } => {
+                        Err(anyhow::anyhow!(message))
+                    }
+                    _ => Err(anyhow::anyhow!("Unexpected response")),
+                }
+            })
+            .await;
+            if let Err(error) = result {
+                let _ = store.update(cx, |store, cx| {
+                    store.set_feedback(
+                        "stop-shortcut",
+                        FeedbackKind::Error,
+                        format!("Couldn't open the desktop's shortcut settings: {error}"),
+                    );
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     fn stop_shortcut(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let config = self.store.read(cx).config.as_ref();
         let current = config
             .map(|c| c.stop_button.to_string())
             .unwrap_or_default();
+        // On the portal path the desktop owns the binding and ignores a changed preference, so
+        // show what it bound and send the user to its settings rather than offering a recorder
+        // whose key would never take effect.
+        let desktop_trigger = self
+            .store
+            .read(cx)
+            .desktop_stop_trigger()
+            .map(str::to_owned);
+        use shared::ipc::control::StopShortcutStatus as Shortcut;
+        let shortcut = self.store.read(cx).stop_shortcut.as_ref();
+        let status = match shortcut {
+            Some(Shortcut::Registered {
+                managed_by_desktop: true,
+                ..
+            }) => "Registered with your desktop".into(),
+            Some(Shortcut::Registered {
+                backend, trigger, ..
+            }) => format!("Registered via {backend}: {trigger}"),
+            Some(Shortcut::Listening { backend }) => format!("Listening via {backend}"),
+            Some(Shortcut::SetupRequired { message, .. } | Shortcut::Failed { message }) => {
+                message.clone()
+            }
+            Some(Shortcut::Checking) => "Checking desktop shortcut...".into(),
+            None => "Supervisor is idle. Check the shortcut to verify desktop setup.".into(),
+        };
+        let can_configure = matches!(
+            shortcut,
+            Some(Shortcut::Registered {
+                can_configure: true,
+                ..
+            })
+        );
+        let can_retry = matches!(shortcut, None | Some(Shortcut::Failed { .. }));
+        let can_setup = matches!(
+            shortcut,
+            Some(Shortcut::SetupRequired {
+                can_setup: true,
+                ..
+            })
+        );
         let recording = self.recording;
         let recorder = self.recorder.clone();
 
@@ -185,6 +306,34 @@ impl SafetyPage {
             .child(ui::hint(
                 "Pressing this key combination stops a running session immediately.",
             ))
+            .child(ui::readout(status))
+            .when(can_setup, |this| {
+                this.child(
+                    Button::new("setup-stop-shortcut", "Set up desktop shortcut")
+                        .size(Size::Compact)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.setup_stop_shortcut(false, window, cx)
+                        })),
+                )
+            })
+            .when(can_retry, |this| {
+                this.child(
+                    Button::new(
+                        "retry-stop-shortcut",
+                        if shortcut.is_some() {
+                            "Retry shortcut"
+                        } else {
+                            "Check shortcut"
+                        },
+                    )
+                    .size(Size::Compact)
+                    .on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.setup_stop_shortcut(true, window, cx)
+                        }),
+                    ),
+                )
+            })
             .when(!hardware::input_monitoring_granted(), |this| {
                 this.child(
                     div()
@@ -212,11 +361,44 @@ impl SafetyPage {
                             .flex_col()
                             .gap_1()
                             .child(ui::label("Current shortcut"))
-                            .child(ui::hint(
-                                "Click the shortcut, then press the new key combination.",
-                            )),
+                            .when(desktop_trigger.is_some() && !can_configure, |this| {
+                                this.child(ui::hint(
+                                    "Change it in your desktop's shortcut settings, under Lewdware.",
+                                ))
+                            }),
                     )
-                    .child(
+                    .when_some(desktop_trigger.clone(), |this, trigger| {
+                        this.child(
+                            div().flex().items_center().gap_2().child(
+                            div()
+                                .id("stop-desktop-trigger")
+                                .min_w(px(160.))
+                                .px_4()
+                                .py_2()
+                                .flex()
+                                .justify_center()
+                                .rounded(theme::RADIUS_MD)
+                                .border_2()
+                                .border_color(c(theme::BORDER))
+                                .bg(c(theme::BG))
+                                .text_size(px(13.))
+                                .font_family(theme::FONT_MONO)
+                                .font_weight(gpui_kit::FontWeight::BOLD)
+                                .child(trigger),
+                            )
+                            .when(can_configure, |this| {
+                                this.child(
+                                    Button::new("configure-stop-shortcut", "Change...")
+                                        .size(Size::Compact)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.configure_stop_shortcut(cx)
+                                        })),
+                                )
+                            }),
+                        )
+                    })
+                    .when(desktop_trigger.is_none(), |this| {
+                        this.child(
                         div()
                             .id("stop-recorder")
                             .track_focus(&self.recorder)
@@ -251,7 +433,8 @@ impl SafetyPage {
                                 window.focus(&recorder, cx);
                                 cx.notify();
                             })),
-                    ),
+                        )
+                    }),
             )
     }
 
@@ -420,9 +603,6 @@ impl SafetyPage {
             .border_t_1()
             .border_color(c(theme::BORDER))
             .child(ui::section_title("Permissions"))
-            .child(ui::hint(
-                "Control what the running pack or mode is allowed to do.",
-            ))
             .child(rows)
     }
 }
@@ -434,7 +614,7 @@ impl Render for SafetyPage {
         ui::page(
             "safety",
             "Safety",
-            "Control how to stop a running session and what packs and modes may do outside their windows.",
+            "",
             [shortcut.into_any_element(), permissions.into_any_element()],
         )
     }

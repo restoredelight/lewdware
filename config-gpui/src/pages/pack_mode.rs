@@ -250,6 +250,8 @@ pub struct PackModePage {
     controls_mode: Option<Mode>,
     /// The last value an optional option had before it was switched off, to restore it with.
     last_values: HashMap<String, StoredValue>,
+    /// The option field with focus, for its border.
+    focused_input: Option<gpui_kit::EntityId>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -264,6 +266,7 @@ impl PackModePage {
             controls: HashMap::new(),
             controls_mode: None,
             last_values: HashMap::new(),
+            focused_input: None,
             _subscriptions: subscriptions,
         }
     }
@@ -313,10 +316,17 @@ impl PackModePage {
                                 this.set_option(option_key.clone(), StoredValue::Str(text), cx);
                             }
                         });
+                    let mut subscriptions = vec![subscription];
+                    subscriptions.extend(ui::track_focused_input(
+                        &input,
+                        |this: &mut Self| &mut this.focused_input,
+                        window,
+                        cx,
+                    ));
                     Controls {
                         input: Some(input),
                         slider: None,
-                        _subscriptions: vec![subscription],
+                        _subscriptions: subscriptions,
                     }
                 }
                 option_type => {
@@ -332,7 +342,12 @@ impl PackModePage {
                         InputState::new(window, cx)
                             .default_value(current.map(format_number).unwrap_or_default())
                     });
-                    let mut subscriptions = Vec::new();
+                    let mut subscriptions = Vec::from(ui::track_focused_input(
+                        &input,
+                        |this: &mut Self| &mut this.focused_input,
+                        window,
+                        cx,
+                    ));
                     let option_key = key.clone();
                     // Typed values are committed on Enter or leaving the field, held to the
                     // mode's declared step only.
@@ -464,13 +479,14 @@ impl PackModePage {
             .text_size(px(11.))
             .text_color(c(theme::MUTED))
             .child(format!(
-                "Requires the {} {} ·",
+                "Requires the {} {}. Allow {} in",
                 permission_sentence(permissions),
                 if permissions.len() > 1 {
                     "permissions"
                 } else {
                     "permission"
-                }
+                },
+                if permissions.len() > 1 { "them" } else { "it" }
             ))
             .child(
                 div()
@@ -510,9 +526,7 @@ impl PackModePage {
             }
             OptionType::String { .. } => match self.controls.get(key).and_then(|c| c.input.clone())
             {
-                Some(input) => field_box(Input::new(&input).appearance(false).text_size(px(13.)))
-                    .w(px(224.))
-                    .into_any_element(),
+                Some(input) => self.field_box(&input).w(px(224.)).into_any_element(),
                 None => div().into_any_element(),
             },
             OptionType::Enum { values, .. } => {
@@ -551,10 +565,7 @@ impl PackModePage {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(
-                            field_box(Input::new(&input).appearance(false).text_size(px(13.)))
-                                .w(px(96.)),
-                        )
+                        .child(self.field_box(&input).w(px(96.)))
                         .when_some(option.suffix.clone(), |this, suffix| {
                             this.child(ui::readout(suffix).text_size(px(12.)))
                         })
@@ -821,7 +832,7 @@ impl PackModePage {
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>()
-                .join(" · ");
+                .join(", ");
                 let description = metadata.and_then(|m| m.description.clone());
                 let picker = entity.clone();
 
@@ -1215,17 +1226,26 @@ impl PackModePage {
 }
 
 /// A text field's frame: the app's input look around an unstyled gpui-component input.
-fn field_box(input: Input) -> gpui_kit::Div {
-    div()
-        .h(theme::CONTROL_COMPACT)
-        .px_2()
-        .flex()
-        .items_center()
-        .rounded(theme::RADIUS_SM)
-        .border_1()
-        .border_color(c(theme::BORDER))
-        .bg(c(theme::BG))
-        .child(input.flex_1())
+impl PackModePage {
+    fn field_box(&self, input: &Entity<InputState>) -> gpui_kit::Div {
+        div()
+            .h(theme::CONTROL_COMPACT)
+            .px_2()
+            .flex()
+            .items_center()
+            .rounded(theme::RADIUS_SM)
+            .border_1()
+            .border_color(ui::field_border(
+                self.focused_input == Some(input.entity_id()),
+            ))
+            .bg(c(theme::BG))
+            .child(
+                Input::new(input)
+                    .appearance(false)
+                    .text_size(px(13.))
+                    .flex_1(),
+            )
+    }
 }
 
 impl Render for PackModePage {

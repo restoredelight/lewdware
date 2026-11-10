@@ -143,7 +143,8 @@ impl Session {
         let fresh = pack::read_files(&self.connection, Some(files))?;
         let media = self.media.apply(files, fresh);
         self.history = history::status(&self.connection)?;
-        let mut scopes = Scope::Slots | Scope::Tags;
+        // Stage slots are the timeline's.
+        let mut scopes = Scope::Slots | Scope::Timeline | Scope::Tags;
         if !media.is_empty() {
             scopes |= Scope::Media;
         }

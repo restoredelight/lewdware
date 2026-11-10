@@ -10,6 +10,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::*;
 use gpui_kit::Focusable as _;
 use gpui_kit::{
@@ -572,18 +573,20 @@ impl ContentView {
                 let active = editing.highlighted.or(options.default);
                 let keys = cx.entity();
                 let close = cx.entity();
+                let menu_bounds = self.tag_menu_bounds.clone();
+                menu_bounds.set(None);
+                let measure = menu_bounds.clone();
                 let menu = (!options.rows.is_empty()).then(|| {
-                    gpui_kit::deferred(
+                    crate::ui::floating(
+                        theme::CONTROL_COMPACT - px(2.),
+                        false,
                         div()
                             .id("tag-suggestions")
                             .occlude()
-                            .absolute()
-                            .top(theme::CONTROL_COMPACT - px(2.))
-                            .left_0()
                             .min_w(px(200.))
                             .max_w(px(320.))
                             .max_h(px(224.))
-                            .overflow_y_scroll()
+                            .overflow_y_scrollbar()
                             .p_1()
                             .rounded(theme::RADIUS_MD)
                             .border_1()
@@ -596,6 +599,14 @@ impl ContentView {
                                 spread_radius: px(0.),
                                 inset: false,
                             }])
+                            .child(
+                                gpui_kit::canvas(
+                                    move |bounds, _, _| measure.set(Some(bounds)),
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .size_full(),
+                            )
                             .children(options.rows.into_iter().take(100).enumerate().map(
                                 |(index, (tag, create))| {
                                     let entity = cx.entity();
@@ -637,14 +648,12 @@ impl ContentView {
                                 },
                             )),
                     )
-                    .with_priority(1)
                 });
                 div()
                     .id(field.element_id())
                     .relative()
                     .w(px(180.))
                     .h(px(26.))
-                    .px_2()
                     .flex()
                     .items_center()
                     .rounded(theme::RADIUS_SM)
@@ -665,7 +674,14 @@ impl ContentView {
                             _ => {}
                         },
                     )
-                    .on_mouse_down_out(move |_, window, cx| {
+                    .on_mouse_down_out(move |event, window, cx| {
+                        // The suggestions float outside the field; a press on one adds it.
+                        if menu_bounds
+                            .get()
+                            .is_some_and(|bounds| bounds.contains(&event.position))
+                        {
+                            return;
+                        }
                         close.update(cx, |this, cx| this.cancel_editing(window, cx));
                     })
                     .child(

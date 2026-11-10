@@ -29,7 +29,7 @@ pub(super) struct Field {
     /// Whether leaving the field commits it, or only Enter does.
     on_blur: bool,
     commit: Commit,
-    _events: Subscription,
+    _events: Vec<Subscription>,
 }
 
 /// What a field shows and how it reads back.
@@ -113,8 +113,11 @@ impl TimelineView {
                     .default_value(current.clone())
             });
             let events_key = key.clone();
-            let _events =
-                cx.subscribe_in(&input, window, move |this, _, event: &InputEvent, _, cx| {
+            let mut _events = Vec::from(ui::track_focus_of(&input, window, cx));
+            _events.push(cx.subscribe_in(
+                &input,
+                window,
+                move |this, _, event: &InputEvent, _, cx| {
                     match event {
                         InputEvent::PressEnter { .. } => this.commit_field(&events_key, cx),
                         InputEvent::Blur => {
@@ -126,7 +129,18 @@ impl TimelineView {
                         InputEvent::Change => cx.notify(),
                         InputEvent::Focus => {}
                     }
-                });
+                },
+            ));
+            // gpui's own blur, which always arrives: leaving a field commits it even when the
+            // input doesn't report the blur, rather than the next render putting the stored value
+            // back over what was typed.
+            let handle = input.read(cx).focus_handle(cx);
+            let blur_key = key.clone();
+            _events.push(cx.on_blur(&handle, window, move |this, _, cx| {
+                if this.fields.get(&blur_key).is_some_and(|f| f.on_blur) {
+                    this.commit_field(&blur_key, cx);
+                }
+            }));
             self.fields.insert(
                 key.clone(),
                 Field {
@@ -148,7 +162,17 @@ impl TimelineView {
         field.used = true;
         let input = field.input.clone();
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
-        if (field.resync || !focused) && input.read(cx).value().as_ref() != current {
+        let typed = input.read(cx).value().to_string();
+        // Focus just left with an edit in it. gpui reports the blur only after drawing the frame
+        // this render is for, so putting the stored value back here would leave the blur nothing
+        // to commit: commit it now instead (once the render is over), and keep what was typed
+        // on screen until it has.
+        let left_with_edit =
+            !focused && !field.resync && field.on_blur && typed.trim() != field.shown.trim();
+        if left_with_edit {
+            let key = key.clone();
+            cx.defer_in(window, move |this, _, cx| this.commit_field(&key, cx));
+        } else if (field.resync || !focused) && typed != current {
             input.update(cx, |input, cx| input.set_value(current.clone(), window, cx));
         }
         field.resync = false;
@@ -163,6 +187,9 @@ impl TimelineView {
         let text = field.input.read(cx).value().to_string();
         field.resync = true;
         let changed = text.trim() != field.shown.trim();
+        // Counts as shown until the next render says otherwise, so a second commit of the same
+        // edit (the render's and the blur's) does nothing.
+        field.shown = text.clone();
         let commit = field.commit.clone();
         if changed {
             commit(self, &text, cx);
@@ -242,10 +269,10 @@ impl TimelineView {
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         let view = cx.entity();
         let key = key.clone();
+        // No padding of its own: the input brings it (`ui::INPUT_PAD`).
         div()
             .h(theme::CONTROL_COMPACT)
             .min_w_0()
-            .px_2()
             .flex()
             .items_center()
             .gap_2()
@@ -265,7 +292,7 @@ impl TimelineView {
                     .text_size(text_size)
                     .flex_1(),
             )
-            .children(suffix.map(ui::readout))
+            .children(suffix.map(|suffix| ui::readout(suffix).pr_2()))
     }
 
     /// A labelled text field. Returns the field's box under its label.

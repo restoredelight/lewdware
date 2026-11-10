@@ -5,9 +5,15 @@
 //! All three use the spawned-window motif (`shared-ui/DESIGN.md`): a slim titlebar with a carmine
 //! dot and a mono title, a hard offset shadow, and one faded echo frame behind.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui_kit::assets::IconName;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::*;
-use gpui_kit::{div, px, AnyElement, App, FocusHandle, FontWeight, SharedString, Window};
+use gpui_kit::{
+    div, px, AnyElement, App, FocusHandle, FontWeight, Pixels, Point, Render, SharedString, Window,
+};
 use pack_editor_core::session::lifecycle::{warning_kind_label, ConversionWarning, ImportProgress};
 
 use crate::theme::{self, c};
@@ -15,11 +21,24 @@ use crate::ui::{Button, Size, Variant};
 
 type Handler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
+/// The payload of a drag on the import window's titlebar: where in the titlebar it was grabbed,
+/// filled in when the drag starts. The shell follows it (`Shell::render`). Draws nothing.
+#[derive(Clone, Default)]
+pub struct MoveImportWindow(pub Rc<Cell<Point<Pixels>>>, Rc<Cell<Point<Pixels>>>);
+
+impl Render for MoveImportWindow {
+    fn render(&mut self, _: &mut Window, _: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+        gpui_kit::Empty
+    }
+}
+
 /// A spawned window: titlebar (dot, mono title, then `controls`), a body, the echo frame behind.
+/// With `drag`, the titlebar drags it.
 pub fn popup_frame(
     title: impl Into<SharedString>,
     controls: Vec<AnyElement>,
     body: Option<AnyElement>,
+    drag: Option<MoveImportWindow>,
 ) -> gpui_kit::Div {
     let has_body = body.is_some();
     let panel = div()
@@ -39,6 +58,21 @@ pub fn popup_frame(
         }])
         .child(
             div()
+                .id("popup-titlebar")
+                .when_some(drag, |this, drag| {
+                    let pressed = drag.1.clone();
+                    // gpui measures the grab from where the pointer is once it has moved far
+                    // enough to count as a drag; measured from the press, the window stays put
+                    // under the pointer instead of jumping by that distance.
+                    this.on_mouse_down(gpui_kit::MouseButton::Left, move |event, _, _| {
+                        pressed.set(event.position)
+                    })
+                    .on_drag(drag, |drag, offset, window, cx| {
+                        let origin = window.mouse_position() - offset;
+                        drag.0.set(drag.1.get() - origin);
+                        cx.new(|_| drag.clone())
+                    })
+                })
                 .h(px(30.))
                 .px(px(10.))
                 .flex()
@@ -108,7 +142,12 @@ fn title_button(
         .cursor_pointer()
         .hover(|style| style.bg(c(theme::SURFACE)).text_color(c(theme::TEXT)))
         .child(icon)
-        .on_click(move |_, window, cx| on_click(window, cx))
+        // Not a drag of the titlebar it sits in.
+        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            on_click(window, cx)
+        })
         .into_any_element()
 }
 
@@ -135,6 +174,9 @@ fn plural(count: usize, one: &str, many: &str) -> String {
 /// What the import window needs to draw itself, and what its controls do.
 pub struct ImportWindow {
     pub progress: ImportProgress,
+    /// Where its top left corner was dragged to, in the shell; `None` is the bottom right corner.
+    pub position: Option<Point<Pixels>>,
+    pub drag: MoveImportWindow,
     /// Resolving paths or waiting on the encoder: running, but nothing counted yet.
     pub preparing: bool,
     pub minimized: bool,
@@ -156,6 +198,8 @@ impl ImportWindow {
     pub fn render(self) -> impl IntoElement {
         let Self {
             progress,
+            position,
+            drag,
             preparing,
             minimized,
             errors_open,
@@ -276,7 +320,7 @@ impl ImportWindow {
                                 div()
                                     .id("import-errors")
                                     .max_h(px(160.))
-                                    .overflow_y_scroll()
+                                    .overflow_y_scrollbar()
                                     .flex()
                                     .flex_col()
                                     .gap(px(6.))
@@ -309,11 +353,16 @@ impl ImportWindow {
         let minimized_bar = (minimized && running).then(|| bar(progress.fraction(), 3.));
 
         div()
+            .id("import-window")
+            // Clicks on it stop here, not on whatever is under it.
+            .occlude()
             .absolute()
-            .right(px(16.))
-            .bottom(px(16.))
+            .map(|this| match position {
+                Some(position) => this.left(position.x).top(position.y),
+                None => this.right(px(16.)).bottom(px(16.)),
+            })
             .when(!minimized, |this| this.w(px(320.)))
-            .child(popup_frame("Import", controls, body).children(minimized_bar))
+            .child(popup_frame("Import", controls, body, Some(drag)).children(minimized_bar))
     }
 }
 
@@ -338,6 +387,7 @@ pub fn drop_overlay() -> impl IntoElement {
                         .child("Drop files or folders to import them into this pack.")
                         .into_any_element(),
                 ),
+                None,
             )),
         )
 }
@@ -365,7 +415,7 @@ pub fn warnings_dialog(
     let list = div()
         .id("warnings-list")
         .max_h(px((viewport.height.as_f32() - 260.).max(120.)))
-        .overflow_y_scroll()
+        .overflow_y_scrollbar()
         .flex()
         .flex_col()
         .gap_2()
@@ -440,7 +490,7 @@ pub fn warnings_dialog(
                             .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation()
                             })
-                            .child(popup_frame("Import warnings", vec![close], Some(body))),
+                            .child(popup_frame("Import warnings", vec![close], Some(body), None)),
                     ),
             ),
     )

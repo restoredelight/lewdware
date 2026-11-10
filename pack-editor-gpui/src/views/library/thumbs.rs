@@ -50,7 +50,9 @@ impl Thumbnails {
 
     /// The thumbnail for `id` if it's ready, noting that the grid drew (or wants) it.
     pub fn want(&mut self, id: u64) -> Option<Arc<RenderImage>> {
-        self.visible.insert(id);
+        // `uniform_list` draws its first row twice a frame (once to measure it), so the first
+        // tile asks twice: queue it once.
+        let first_ask = self.visible.insert(id);
         match self.slots.get_mut(&id) {
             Some(Slot::Ready { image, used }) => {
                 *used = self.frame;
@@ -58,7 +60,9 @@ impl Thumbnails {
             }
             Some(Slot::Missing) => None,
             None => {
-                self.wanted.push(id);
+                if first_ask {
+                    self.wanted.push(id);
+                }
                 None
             }
         }
@@ -123,6 +127,11 @@ impl Thumbnails {
                         Some(image) => {
                             thumbs.decoded += 1;
                             Slot::Ready { image, used: frame }
+                        }
+                        // Never over a decoded image: an id asked for twice used to land as
+                        // decoded and then as missing, which blanked the grid's first tile.
+                        None if matches!(thumbs.slots.get(&id), Some(Slot::Ready { .. })) => {
+                            continue;
                         }
                         None => Slot::Missing,
                     };

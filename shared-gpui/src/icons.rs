@@ -22,9 +22,13 @@ gpui_kit::assets::icon_assets!(
         Merge,
         Music,
         Pencil,
+        Repeat,
+        RotateCcw,
         Tag,
         Trash,
         Upload,
+        Volume2,
+        VolumeX,
     ]
 );
 

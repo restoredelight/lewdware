@@ -12,6 +12,7 @@
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, px, AnyElement, ClipboardItem, Context, Entity, EventEmitter, Focusable, FontWeight,
@@ -34,6 +35,8 @@ use crate::ui::{self, Button, RadioOption, Size, Variant};
 use crate::views::timeline::{stage_membership, StageMembership};
 
 pub(crate) const WIDTH: f32 = 320.;
+/// How far the inspector's edge drags.
+pub(crate) const WIDTH_RANGE: (f32, f32) = (260., 560.);
 
 pub(crate) enum InspectorEvent {
     /// Asks to remove these files (the browser confirms first).
@@ -187,7 +190,7 @@ impl Inspector {
             ),
         ];
 
-        Self {
+        let mut this = Self {
             tab,
             editor,
             ids: Vec::new(),
@@ -207,7 +210,33 @@ impl Inspector {
             dragged_volume: None,
             membership: None,
             _subscriptions: subscriptions,
+        };
+        this.track_fields(window, cx);
+        this
+    }
+
+    /// Redraws on focus changes (field borders, the suggestion lists) and commits the name and
+    /// source when they lose focus, on gpui's own focus events, which always arrive.
+    fn track_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for input in [
+            self.name.clone(),
+            self.source.clone(),
+            self.tag_input.clone(),
+            self.artist_input.clone(),
+        ] {
+            self._subscriptions
+                .extend(ui::track_focus_of(&input, window, cx));
         }
+        let name = self.name.read(cx).focus_handle(cx);
+        let source = self.source.read(cx).focus_handle(cx);
+        self._subscriptions
+            .push(cx.on_blur(&name, window, |this, window, cx| {
+                this.commit_name(window, cx)
+            }));
+        self._subscriptions
+            .push(cx.on_blur(&source, window, |this, window, cx| {
+                this.commit_source(window, cx)
+            }));
     }
 
     /// Points the inspector at a new selection. Cheap when nothing changed.
@@ -454,9 +483,11 @@ impl Inspector {
         &self,
         input: &Entity<InputState>,
         trailing: Option<AnyElement>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let this = cx.entity();
+        let focused = input.read(cx).focus_handle(cx).is_focused(window);
         div()
             .flex()
             .items_center()
@@ -466,12 +497,11 @@ impl Inspector {
                     .flex_1()
                     .min_w_0()
                     .h(theme::CONTROL_COMPACT)
-                    .px_2()
                     .flex()
                     .items_center()
                     .rounded(theme::RADIUS_SM)
                     .border_1()
-                    .border_color(c(theme::BORDER))
+                    .border_color(c(if focused { theme::FOCUS } else { theme::BORDER }))
                     .bg(c(theme::BG))
                     .on_key_down(move |event, window, cx| {
                         if event.keystroke.key == "escape" {
@@ -521,6 +551,7 @@ impl Inspector {
         kind: LabelKind,
         files: &[&MediaFile],
         suggestions: &[String],
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let summary = LabelSummary::of(files.iter().copied(), kind);
@@ -529,7 +560,10 @@ impl Inspector {
             LabelKind::Artists => ("Artists", &self.artist_input),
         };
         let typed = input.read(cx).value().trim().to_lowercase();
-        let matches: Vec<String> = if typed.is_empty() {
+        // While the field has focus: the pack's names, narrowed by what's typed. Gone once it
+        // loses focus.
+        let focused = input.read(cx).focus_handle(cx).is_focused(window);
+        let matches: Vec<String> = if !focused {
             Vec::new()
         } else {
             suggestions
@@ -641,14 +675,12 @@ impl Inspector {
         let suggestion_list = (!matches.is_empty()).then(|| {
             let entity = entity.clone();
             let input = input.clone();
-            div()
+            ui::popover_surface()
+                .min_w(px(200.))
+                .max_w(px(300.))
                 .flex()
                 .flex_col()
                 .p_1()
-                .rounded(theme::RADIUS_MD)
-                .border_1()
-                .border_color(c(theme::BORDER_STRONG))
-                .bg(c(theme::SURFACE_RAISED))
                 .children(matches.into_iter().enumerate().map(move |(index, name)| {
                     let entity = entity.clone();
                     let input = input.clone();
@@ -661,7 +693,11 @@ impl Inspector {
                         .cursor_pointer()
                         .hover(|style| style.bg(c(theme::SURFACE)))
                         .child(name.clone())
-                        .on_click(move |_, window, cx| {
+                        // On press, and keeping focus in the field: the list goes when the field
+                        // loses focus, which a click would otherwise do before it landed.
+                        .on_mouse_down(gpui_kit::MouseButton::Left, move |_, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
                             input.update(cx, |input, cx| input.set_value("", window, cx));
                             entity.update(cx, |this, cx| this.edit_label(kind, &name, true, cx));
                         })
@@ -672,11 +708,19 @@ impl Inspector {
             .when(!summary.common.is_empty(), |this| {
                 this.child(div().flex().flex_wrap().gap(px(5.)).children(chips))
             })
-            .child(self.field(input, None, cx))
+            // The suggestions float under the field, over what follows it.
+            .child(
+                div()
+                    .relative()
+                    .child(self.field(input, None, window, cx))
+                    .children(
+                        suggestion_list
+                            .map(|list| ui::floating(theme::CONTROL_COMPACT + px(4.), false, list)),
+                    ),
+            )
             .when(several, |this| {
                 this.child(ui::hint("Adds to every selected item.").text_size(px(11.)))
             })
-            .children(suggestion_list)
             .when(!summary.mixed.is_empty(), |this| {
                 this.child(
                     div()
@@ -910,7 +954,7 @@ enum Target {
 }
 
 impl Render for Inspector {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor.read(cx);
         let files: Vec<MediaFile> = self.files(editor).into_iter().cloned().collect();
         let primary = self
@@ -921,13 +965,9 @@ impl Render for Inspector {
         let artist_names = label_names(editor.session().media(), LabelKind::Artists);
         let shell = div()
             .id("inspector")
-            .w(px(WIDTH))
-            .h_full()
-            .flex_none()
+            .size_full()
             .flex()
             .flex_col()
-            .border_l_1()
-            .border_color(c(theme::BORDER))
             .bg(c(theme::SURFACE));
 
         let Some(primary) = primary else {
@@ -988,9 +1028,15 @@ impl Render for Inspector {
                     })
             });
 
+        // Audio has no picture: just the player's controls.
+        let audio = matches!(primary.file_info, FileInfo::Audio { .. });
         let preview = div()
             .flex_none()
-            .h(px(250.))
+            .h(px(if audio {
+                media_gpui::CONTROLS_HEIGHT
+            } else {
+                250.
+            }))
             .border_b_1()
             .border_color(c(theme::BORDER))
             .bg(c(theme::BG))
@@ -1000,7 +1046,7 @@ impl Render for Inspector {
             .id("inspector-body")
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
+            .overflow_y_scrollbar()
             .p_3()
             .flex()
             .flex_col()
@@ -1008,17 +1054,6 @@ impl Render for Inspector {
 
         if single {
             body = body.children(self.used_as(&primary));
-        }
-        if self.tab == MediaTab::Popups {
-            body = body.child(
-                Self::section("Popup").child(
-                    ui::hint(
-                        "Per-popup settings (size, placement, caption) aren't ported to this \
-                         editor yet. View shows the file at full size.",
-                    )
-                    .text_size(px(11.)),
-                ),
-            );
         }
         body = body.children(self.audio_controls(&refs, cx));
 
@@ -1043,6 +1078,7 @@ impl Render for Inspector {
                                 )
                                 .into_any_element(),
                             ),
+                            window,
                             cx,
                         ),
                     )
@@ -1063,14 +1099,15 @@ impl Render for Inspector {
                             )
                             .into_any_element()
                         }),
+                        window,
                         cx,
                     )),
             );
         }
 
         body = body
-            .child(self.labels(LabelKind::Tags, &refs, &tag_names, cx))
-            .child(self.labels(LabelKind::Artists, &refs, &artist_names, cx));
+            .child(self.labels(LabelKind::Tags, &refs, &tag_names, window, cx))
+            .child(self.labels(LabelKind::Artists, &refs, &artist_names, window, cx));
 
         if single {
             body = body

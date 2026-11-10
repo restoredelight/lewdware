@@ -164,4 +164,6 @@ pub fn install(cx: &mut App) {
     // Both apps are dark-only (DESIGN.md), so the system appearance is never followed.
     Theme::update(cx, |theme| theme.dark_theme = config);
     Theme::change(ThemeMode::Dark, None, cx);
+    // A scrollbar that only appears mid-scroll hides that there's more to scroll to.
+    Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
 }

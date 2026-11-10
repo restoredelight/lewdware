@@ -125,6 +125,10 @@ impl MetadataView {
             },
         ));
 
+        for input in [&name, &creator, &version] {
+            subscriptions.extend(ui::track_focus_of(input, window, cx));
+        }
+        subscriptions.extend(ui::track_focus_of(&description, window, cx));
         Self {
             editor,
             name,
@@ -265,25 +269,29 @@ impl MetadataView {
         &self,
         field: Field,
         label: &'static str,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         let view = cx.entity();
+        let focused = self.input(field).focus_handle(cx).is_focused(window);
         div()
             .flex()
             .flex_col()
             .gap(px(5.))
             .child(field_label(label))
             .child(
+                // No padding of its own: the input brings it.
                 div()
                     .h(theme::CONTROL_NORMAL)
-                    .px_2()
                     .flex()
                     .items_center()
                     .rounded(theme::RADIUS_SM)
                     .border_1()
-                    .border_color(c(theme::BORDER))
+                    .border_color(c(if focused { theme::FOCUS } else { theme::BORDER }))
                     .bg(c(theme::SURFACE))
-                    .hover(|style| style.border_color(c(theme::BORDER_STRONG)))
+                    .when(!focused, |this| {
+                        this.hover(|style| style.border_color(c(theme::BORDER_STRONG)))
+                    })
                     .on_key_down(move |event, window, cx| {
                         if event.keystroke.key == "escape" {
                             cx.stop_propagation();
@@ -312,13 +320,14 @@ fn field_label(text: &'static str) -> gpui_kit::Div {
 impl Render for MetadataView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.commit_unfocused(window, cx);
+        let description_focused = self.description.focus_handle(cx).is_focused(window);
         let fields = div()
             .max_w(px(512.))
             .flex()
             .flex_col()
             .gap_3()
-            .child(self.line_field(Field::Name, "Name", cx))
-            .child(self.line_field(Field::Creator, "Creator", cx))
+            .child(self.line_field(Field::Name, "Name", window, cx))
+            .child(self.line_field(Field::Creator, "Creator", window, cx))
             .child(
                 div()
                     .flex()
@@ -326,14 +335,19 @@ impl Render for MetadataView {
                     .gap(px(5.))
                     .child(field_label("Description"))
                     .child(
+                        // The textarea brings its own padding.
                         div()
-                            .px_2()
-                            .py(px(6.))
                             .rounded(theme::RADIUS_SM)
                             .border_1()
-                            .border_color(c(theme::BORDER))
+                            .border_color(c(if description_focused {
+                                theme::FOCUS
+                            } else {
+                                theme::BORDER
+                            }))
                             .bg(c(theme::SURFACE))
-                            .hover(|style| style.border_color(c(theme::BORDER_STRONG)))
+                            .when(!description_focused, |this| {
+                                this.hover(|style| style.border_color(c(theme::BORDER_STRONG)))
+                            })
                             .child(
                                 Textarea::new(&self.description)
                                     .appearance(false)
@@ -341,7 +355,7 @@ impl Render for MetadataView {
                             ),
                     ),
             )
-            .child(self.line_field(Field::Version, "Version", cx));
+            .child(self.line_field(Field::Version, "Version", window, cx));
         ui::page_body("metadata-page", [fields.into_any_element()])
     }
 }

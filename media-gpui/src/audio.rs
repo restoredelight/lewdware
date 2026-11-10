@@ -57,7 +57,6 @@ pub struct AudioFrames {
     decoder: ffmpeg::decoder::Audio,
     stream_index: usize,
     time_base: ffmpeg::Rational,
-    loop_audio: Arc<AtomicBool>,
     frame: frame::Audio,
     empty_passes: u32,
     /// NEW: samples before this media time are dropped (first pass only, after a seek).
@@ -72,9 +71,10 @@ pub enum Decoded {
 }
 
 impl AudioFrames {
+    /// Decodes pass after pass: whether the track loops is decided as it plays (`TrackSource`),
+    /// not here, where the decoder runs ahead of playback.
     pub fn open(
         source: MediaSource,
-        loop_audio: Arc<AtomicBool>,
         start: Duration,
     ) -> Result<Option<Self>> {
         ffmpeg::init()?;
@@ -101,7 +101,6 @@ impl AudioFrames {
             decoder,
             stream_index,
             time_base,
-            loop_audio,
             frame: frame::Audio::empty(),
             empty_passes: 0,
             skip_until: (!start.is_zero()).then_some(start),
@@ -129,10 +128,9 @@ impl AudioFrames {
                 return Some(Decoded::Samples(buffer));
             }
 
-            if !self.loop_audio.load(Ordering::Relaxed) {
-                return None;
-            }
-
+            // CHANGED: always on to the next pass. The engine stops here when not looping, but the
+            // preview's loop button can change between the decoder reaching the end (up to the
+            // whole queue ahead, all of a short clip) and playback reaching it.
             self.empty_passes += 1;
             if self.empty_passes >= MAX_EMPTY_PASSES {
                 tracing::error!("audio decoded nothing over {MAX_EMPTY_PASSES} passes");
@@ -206,7 +204,6 @@ const DECODE_CHUNK_FRAMES: usize = 1024;
 const UNDERRUN_SILENCE: Duration = Duration::from_millis(10);
 
 struct Chunk {
-    #[allow(dead_code)]
     pass: u64,
     samples: Vec<f32>,
 }
@@ -283,6 +280,11 @@ impl TrackClock {
 
 struct TrackSource {
     rx: mpsc::Receiver<Chunk>,
+    /// ADDED: read at each seam between passes, as it plays.
+    loop_audio: Arc<AtomicBool>,
+    /// ADDED: the pass playing, and whether the track has ended at a seam.
+    pass: u64,
+    ended: bool,
     first: Option<Chunk>,
     samples: Vec<f32>,
     position: usize,
@@ -303,6 +305,10 @@ impl Iterator for TrackSource {
             return Some(0.0);
         }
 
+        if self.ended {
+            return None;
+        }
+
         if self.position >= self.samples.len() {
             let chunk = match self.first.take() {
                 Some(chunk) => chunk,
@@ -317,6 +323,13 @@ impl Iterator for TrackSource {
                     Err(mpsc::TryRecvError::Disconnected) => return None,
                 },
             };
+            if chunk.pass != self.pass {
+                if !self.loop_audio.load(Ordering::Relaxed) {
+                    self.ended = true;
+                    return None;
+                }
+                self.pass = chunk.pass;
+            }
             self.samples = chunk.samples;
             self.position = 0;
         }
@@ -362,7 +375,7 @@ impl AudioPlayer {
         volume: f32,
         start: Duration,
     ) -> Result<Option<Self>> {
-        let Some(frames) = AudioFrames::open(source, loop_audio, start)? else {
+        let Some(frames) = AudioFrames::open(source, start)? else {
             return Ok(None);
         };
 
@@ -383,6 +396,9 @@ impl AudioPlayer {
 
         sink.append(TrackSource {
             rx,
+            loop_audio,
+            pass: first.pass,
+            ended: false,
             first: Some(first),
             samples: Vec::new(),
             position: 0,

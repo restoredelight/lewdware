@@ -78,9 +78,16 @@ Every view is ported. Each track's report (what works, how it was checked, what'
 - **Media library:** a virtualised thumbnail grid (smooth at 10,000 files, bounded thumbnail
   memory), selection, filters and sort, the inspector, removal, the full-size viewer, and the
   Audio, Tags and Artists views.
+  The viewer has the popup settings rail (frequency, size, placement frame, monitor, caption,
+  video looping, sound and volume) and follows imports while it's open.
 - **Content:** captions, prompts, notifications, web links, content groups, and the wallpaper
   and splash slots.
-- **Timeline:** stages, the stage editor, transitions, and the inspector's "Appears in" strip.
+- **Timeline:** stages, the stage editor, transitions, and the "Appears in" strip in the
+  inspector and viewer.
+- **Media slots** (`views/media_slot.rs`, used by Content and Timeline): thumbnail, choose from
+  the pack, upload from disk, remove, and opening the file in the viewer.
+- **Layout:** the sidebar and side panels are resizable (`ui::resizable_sidebar`), scrolling areas
+  show scrollbars, and the import window can be dragged by its titlebar.
 
 The standalone [video playback spike](../spikes/video-gpui/README.md) has a completed measurement
 matrix and an integration recommendation (custom element, explicit image retirement, vsync).
@@ -101,8 +108,18 @@ bounded file handles from the model, including saved archives, rather than start
   the field unfocused. Ctrl+Z inside a focused field undoes the field's text, not the pack.
 - **Bulk edits run on the UI thread**: tagging, removing or restricting a stage across a
   10,000-file pack blocks for 100-200 ms until `Editor` can run writes in the background.
-- **Not ported yet:** per-popup settings (size, placement, caption), importing from disk
-  straight into a stage slot, and thumbnails in stage slots.
+- **Not ported yet:**
+  - the right-click menu on library tiles (everything in it is reachable from the keyboard and
+    the inspector);
+  - play buttons on Audio rows (the inspector's preview is the player);
+  - "Used as" links and the stage wallpaper link switch view but don't select the slot;
+  - the stage's entry notification is a one-line field (Tauri used a two-row textarea);
+  - the import window disappears straight after a clean import instead of staying for 3 s;
+  - pacing for held arrow keys (`keyRepeat.ts`), so they move at the OS repeat rate;
+  - remembering the last media tab and each tab's scroll position;
+  - Tab between fields.
+- **The placement frame's popup** draws the live preview, not a thumbnail, so a video plays in
+  it, without its controls. The Svelte editor showed a still.
 - **Icons are opt-in:** gpui-kit embeds only its own ~100 Lucide icons. Any other icon has to be
   listed in `shared-gpui/src/icons.rs`'s `ExtraIcons`, or it renders as nothing.
 - **Upload locks:** `ops::content::import_into_slot` has its own upload lock and encoder probe,

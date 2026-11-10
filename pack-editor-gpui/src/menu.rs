@@ -129,10 +129,18 @@ impl RenderOnce for Menu {
             })
         };
         let trigger = match self.icon {
-            Some(icon) if self.icon_only => IconButton::new("trigger", icon, self.label)
-                .disabled(self.disabled)
-                .on_click(on_toggle)
-                .into_any_element(),
+            Some(icon) if self.icon_only => {
+                let button = IconButton::new("trigger", icon, self.label)
+                    .disabled(self.disabled)
+                    .on_click(on_toggle);
+                // The tooltip would sit over the menu it opened.
+                if open {
+                    button.without_tooltip()
+                } else {
+                    button
+                }
+                .into_any_element()
+            }
             icon => {
                 let button = Button::new("trigger", self.label)
                     .variant(self.variant)
@@ -211,12 +219,11 @@ impl RenderOnce for Menu {
                             .into_any_element()
                     }
                 });
-            let menu = gpui_kit::deferred(
+            let menu = crate::ui::floating(
+                theme::CONTROL_COMPACT + px(4.),
+                true,
                 div()
                     .id("menu")
-                    .absolute()
-                    .top(theme::CONTROL_COMPACT + px(4.))
-                    .right_0()
                     .w(px(200.))
                     .p_1()
                     .flex()
@@ -234,8 +241,7 @@ impl RenderOnce for Menu {
                     }])
                     .occlude()
                     .children(items),
-            )
-            .with_priority(2);
+            );
             // Clicking anywhere else closes it, the trigger included (so that click doesn't
             // reopen it straight away).
             let viewport = window.viewport_size();
@@ -245,7 +251,7 @@ impl RenderOnce for Menu {
                     .child(
                         div()
                             .id("menu-backdrop")
-                            .occlude()
+                            .block_mouse_except_scroll()
                             .w(viewport.width)
                             .h(viewport.height)
                             .on_mouse_down(gpui_kit::MouseButton::Left, move |_, _, cx| {
@@ -256,7 +262,7 @@ impl RenderOnce for Menu {
                             }),
                     ),
             )
-            .with_priority(1);
+            .with_priority(crate::ui::POPOVER_BACKDROP_PRIORITY);
             [backdrop.into_any_element(), menu.into_any_element()]
         });
 

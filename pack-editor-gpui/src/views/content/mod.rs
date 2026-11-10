@@ -77,24 +77,18 @@ impl Tab {
         }
     }
 
-    fn description(self) -> &'static str {
+    fn description(self) -> Option<&'static str> {
         match self {
-            Tab::Groups => {
-                "Create collections people can enable or disable. Media and messages with any of a group's tags belong to that collection."
-            }
-            Tab::Entries(EntryKind::Caption) => {
-                "Short messages shown alongside popup media. Tagged captions are only used with media carrying a matching tag."
-            }
-            Tab::Entries(EntryKind::Prompt) => "Questions that ask the user for a typed response.",
-            Tab::Entries(EntryKind::Notification) => {
-                "Messages displayed as desktop notifications. A notification can carry a title above its message; leave it blank to show the message on its own."
-            }
+            Tab::Groups => Some(
+                "Create collections people can enable or disable. Media and messages with any of a group's tags belong to that collection.",
+            ),
+            Tab::Entries(EntryKind::Caption) => Some("Shown on popups' title bar"),
+            Tab::Entries(EntryKind::Prompt) => Some("Text that the user has to type"),
+            Tab::Entries(EntryKind::Notification) => None,
             Tab::Entries(EntryKind::WebLink) => {
-                "Links the experience may open in the user's browser."
+                Some("Links the pack may open in the user's browser.")
             }
-            Tab::Slots => {
-                "Pick the image Lewdware uses as the desktop wallpaper, and the one it shows when a session starts."
-            }
+            Tab::Slots => None,
         }
     }
 
@@ -191,6 +185,9 @@ pub struct ContentView {
     data: Data,
     /// The field being edited, if any: the only input entity the view holds.
     editing: Option<Editing>,
+    /// Where the open tag field's suggestions were last drawn: a press there isn't a press
+    /// outside the field, though the menu floats outside its bounds.
+    tag_menu_bounds: std::rc::Rc<std::cell::Cell<Option<gpui_kit::Bounds<gpui_kit::Pixels>>>>,
     removing: Option<Removing>,
     dialog_focus: FocusHandle,
     /// The view's own focus, which it takes back when a field closes (`fields::end_editing`).
@@ -217,23 +214,24 @@ impl ContentView {
             |this, _, event: &EditorEvent, window, cx| match event {
                 EditorEvent::Changed(changes) => {
                     if changes.scopes.intersects(scopes()) {
-                        this.slots.forget_thumbnails(&changes.media);
                         this.reload(window, cx);
                     }
                 }
             },
         );
+        let slots = SlotsState::new(&editor, cx);
         let mut this = Self {
             editor,
             tab: Tab::Entries(EntryKind::Caption),
             data: Data::default(),
             editing: None,
+            tag_menu_bounds: Default::default(),
             removing: None,
             dialog_focus: cx.focus_handle(),
             focus: cx.focus_handle(),
             list: ListState::new(0, ListAlignment::Top, px(400.)),
             cards: Vec::new(),
-            slots: SlotsState::default(),
+            slots,
             toggle_menu_open: false,
             _changes,
             _commit,
@@ -299,7 +297,7 @@ impl ContentView {
             return;
         }
         self.commit_editing(window, cx);
-        self.slots.close_picker();
+        self.slots.close_picker(cx);
         self.toggle_menu_open = false;
         self.tab = tab;
         self.cards = self.card_keys();
@@ -450,9 +448,10 @@ impl ContentView {
                                     this.bg(c(theme::SURFACE_RAISED)).text_color(c(theme::TEXT))
                                 } else {
                                     this.text_color(c(theme::MUTED))
-                                        .hover(|style| style.text_color(c(theme::TEXT)))
                                 }
                             })
+                            // On the active row too: see `ui::NavItem`.
+                            .hover(|style| style.text_color(c(theme::TEXT)))
                             .child(div().flex_1().min_w_0().truncate().child(tab.title()))
                             .children(
                                 self.data
@@ -464,17 +463,20 @@ impl ContentView {
                             }))
                     }))
             });
-        div()
-            .flex_none()
-            .w(px(200.))
-            .h_full()
-            .px_2()
-            .flex()
-            .flex_col()
-            .border_r_1()
-            .border_color(c(theme::BORDER))
-            .bg(c(theme::SURFACE))
-            .children(groups)
+        ui::resizable_sidebar(
+            "content-sidebar",
+            ui::Side::Left,
+            px(200.),
+            (px(160.), px(360.)),
+            div()
+                .size_full()
+                .px_2()
+                .flex()
+                .flex_col()
+                .bg(c(theme::SURFACE))
+                .children(groups),
+            cx,
+        )
     }
 
     /// The title and description above every tab.
@@ -485,11 +487,15 @@ impl ContentView {
             .flex_col()
             .gap(px(6.))
             .child(ui::page_title(self.tab.title()))
-            .child(ui::hint(self.tab.description()).text_size(px(13.)))
+            .children(
+                self.tab
+                    .description()
+                    .map(|text| ui::hint(text).text_size(px(13.))),
+            )
     }
 
     /// The bar over a pool: how many there are, and the way to add one.
-    fn toolbar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let count = self.cards.len();
         let (add_label, extra): (SharedString, Option<AnyElement>) = match self.tab {
             Tab::Entries(kind) => {
@@ -501,7 +507,7 @@ impl ContentView {
                 (format!("Add {}", kind.noun()).into(), None)
             }
             // Groups keep the bar: it also carries the "make a tag toggleable" shortcut.
-            Tab::Groups => ("Add group".into(), self.toggle_tag_select(cx)),
+            Tab::Groups => ("Add group".into(), self.toggle_tag_select(window, cx)),
             Tab::Slots => return None,
         };
         let tab = self.tab;
@@ -534,7 +540,7 @@ impl ContentView {
 
     /// "Make tag toggleable...": every tag no group has yet, one click from being a group. Styled
     /// as `ui::Select`, with its open state on the view.
-    fn toggle_tag_select(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn toggle_tag_select(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let grouped: std::collections::HashSet<&str> = self
             .data
             .groups
@@ -578,17 +584,22 @@ impl ContentView {
                     .child("Make tag toggleable..."),
             )
             .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(c(theme::MUTED))
-                    .child(if open { "▲" } else { "▼" }),
+                div().flex_none().text_color(c(theme::MUTED)).child(
+                    crate::icons::icon(if open {
+                        gpui_kit::assets::IconName::ChevronUp
+                    } else {
+                        gpui_kit::assets::IconName::ChevronDown
+                    })
+                    .size(px(14.)),
+                ),
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 this.toggle_menu_open = !this.toggle_menu_open;
                 cx.notify();
             }));
+        let close = cx.entity();
         let menu = open.then(|| {
-            gpui_kit::deferred(
+            let layer = gpui_kit::deferred(
                 div()
                     .id("toggle-tag-menu")
                     .occlude()
@@ -597,7 +608,7 @@ impl ContentView {
                     .left_0()
                     .right_0()
                     .max_h(px(280.))
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .p_1()
                     .rounded(theme::RADIUS_MD)
                     .border_1()
@@ -610,10 +621,6 @@ impl ContentView {
                         spread_radius: px(0.),
                         inset: false,
                     }])
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.toggle_menu_open = false;
-                        cx.notify();
-                    }))
                     .children(available.into_iter().enumerate().map(|(index, tag)| {
                         div()
                             .id(index)
@@ -631,14 +638,21 @@ impl ContentView {
                             }))
                     })),
             )
-            .with_priority(1)
+            .with_priority(ui::POPOVER_PRIORITY);
+            let backdrop = ui::dismiss_layer("toggle-tag-backdrop", window, move |_, cx| {
+                close.update(cx, |this, cx| {
+                    this.toggle_menu_open = false;
+                    cx.notify();
+                })
+            });
+            [backdrop.into_any_element(), layer.into_any_element()]
         });
         Some(
             div()
                 .relative()
                 .w(px(220.))
                 .child(trigger)
-                .children(menu)
+                .children(menu.into_iter().flatten())
                 .into_any_element(),
         )
     }
@@ -729,7 +743,7 @@ impl Render for ContentView {
                 .id("content-slots")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .overflow_y_scrollbar()
                 .child(
                     div()
                         .mx_auto()
@@ -757,7 +771,7 @@ impl Render for ContentView {
                 .flex_col()
                 .gap_3()
                 .child(self.heading())
-                .children(self.toolbar(cx))
+                .children(self.toolbar(window, cx))
                 .child(self.pool(cx))
                 .into_any_element(),
         };

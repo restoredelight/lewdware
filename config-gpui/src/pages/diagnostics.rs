@@ -41,6 +41,8 @@ pub struct DiagnosticsPage {
     source: Option<String>,
     level: LevelFilter,
     search: Entity<InputState>,
+    /// Set while the search field has focus, for its border.
+    focused_input: Option<gpui_kit::EntityId>,
     /// Keep the newest entry in view. Scrolling up turns it off; scrolling back to the bottom
     /// turns it on again.
     follow: bool,
@@ -52,11 +54,17 @@ pub struct DiagnosticsPage {
 impl DiagnosticsPage {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search logs"));
-        let subscriptions = vec![cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
+        let mut subscriptions = vec![cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
             }
         })];
+        subscriptions.extend(ui::track_focused_input(
+            &search,
+            |this: &mut Self| &mut this.focused_input,
+            window,
+            cx,
+        ));
         let refresh = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(REFRESH).await;
             let Ok(follow) = this.update(cx, |this, _| this.follow) else {
@@ -75,6 +83,7 @@ impl DiagnosticsPage {
             source: None,
             level: LevelFilter::All,
             search,
+            focused_input: None,
             follow: true,
             scroll: ScrollHandle::new(),
             _refresh: refresh,
@@ -281,7 +290,7 @@ impl DiagnosticsPage {
         ui::card()
             .flex_row()
             .child(cell(
-                "Lewdware",
+                "Lewdware version",
                 value(system.map(|s| s.lewdware_version.as_str())),
             ))
             .child(div().w(px(1.)).bg(c(theme::BORDER)))
@@ -424,7 +433,7 @@ impl DiagnosticsPage {
                     .items_center()
                     .rounded(theme::RADIUS_SM)
                     .border_1()
-                    .border_color(c(theme::BORDER))
+                    .border_color(ui::field_border(self.focused_input.is_some()))
                     .bg(c(theme::BG))
                     .text_size(px(12.))
                     .child(
@@ -435,7 +444,7 @@ impl DiagnosticsPage {
                     ),
             )
             .child(
-                Button::new("copy-visible", "Copy visible")
+                Button::new("copy-visible", "Copy")
                     .size(Size::Compact)
                     .disabled(total == 0)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -516,11 +525,7 @@ impl Render for DiagnosticsPage {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(ui::page_title("Diagnostics"))
-                    .child(
-                        ui::hint("Inspect recent activity and collect the information needed to investigate a problem.")
-                            .text_size(px(13.)),
-                    ),
+                    .child(ui::page_title("Diagnostics")),
             )
             .child(
                 div()
@@ -584,16 +589,7 @@ impl Render for DiagnosticsPage {
                             .items_end()
                             .justify_between()
                             .gap_4()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(ui::section_title("Recent logs"))
-                                    .child(ui::hint(
-                                        "Logs are retained for up to 14 days and capped at 50 MB.",
-                                    )),
-                            )
+                            .child(ui::section_title("Recent logs"))
                             .child(
                                 div()
                                     .flex()

@@ -193,11 +193,7 @@ impl TimelineView {
         let all_tags = self.author_tags(cx);
         let restricts = stage.content.tags.is_some();
         let restrict_id = id.clone();
-        let mut card = section(
-            "Content",
-            "Choose which content and wallpaper are used during this stage.",
-            None,
-        )
+        let mut card = section("Content", "", None)
         .child(toggle_row(
             "Active tags",
             previous.map(|previous| {
@@ -232,24 +228,15 @@ impl TimelineView {
                 window,
                 cx,
             ));
-            if let Some(owned) = &stage.content.owned_tag {
-                card = card.child(note(format!(
-                    "\"{owned}\" is this stage's own tag. The editor renames it with the stage, \
-                     and \"Appears in\" in the media views uses it to put files in and out of \
-                     this stage."
-                )));
-            }
         } else {
-            card = card.child(note(
-                "This stage shows every file in the pack. Turn on active tags to choose by tag.",
-            ));
+            card = card.child(note("All content"));
         }
 
         let exclude_id = id.clone();
         card = card
             .child(toggle_row(
                 "Excluded tags",
-                Some("Kept out of this stage even when the tags above let them in.".into()),
+                None,
                 div(),
                 true,
             ))
@@ -297,13 +284,10 @@ impl TimelineView {
                     SlotSpec {
                         slot: MediaSlot::StageWallpaper { stage: id.clone() },
                         title: "Wallpaper",
-                        description: Some(
-                            "The wallpaper this stage sets. Every stage writes it outright, so \
-                         leaving it empty is what keeps the one already in effect.",
-                        ),
+                        description: None,
                         empty_note: match inherited {
                             Some(name) => format!("Keeps \"{name}\".").into(),
-                            None => "Keeps whatever wallpaper is already in effect.".into(),
+                            None => "Keeps the current wallpaper".into(),
                         },
                     },
                     stage.content.wallpaper,
@@ -325,17 +309,14 @@ impl TimelineView {
         let audio_id = id.clone();
         let view = cx.entity();
         let mut audio = div().flex().flex_col().gap_3().child(labelled(
-            "Background audio",
+            "Change the background audio",
             None,
             Select::new(
                 SharedString::from(format!("{id}-audio-mode")),
                 choice,
                 vec![
-                    SelectOption::new(AudioChoice::Keep, "Continue current audio"),
-                    SelectOption::new(
-                        AudioChoice::Random,
-                        "Switch to a random track using active tags",
-                    ),
+                    SelectOption::new(AudioChoice::Keep, "When the current track ends"),
+                    SelectOption::new(AudioChoice::Random, "Switch to a random track"),
                     SelectOption::new(AudioChoice::Specific, "Switch to a specific track"),
                 ],
             )
@@ -381,8 +362,8 @@ impl TimelineView {
             SlotSpec {
                 slot: MediaSlot::StageEntrySplash { stage: id.clone() },
                 title: "Splash",
-                description: Some("A specific image or video shown on entry."),
-                empty_note: "No splash is shown on entry.".into(),
+                description: None,
+                empty_note: "No splash is shown when the stage starts.".into(),
             },
             stage.on_enter.splash,
             window,
@@ -392,8 +373,8 @@ impl TimelineView {
             SlotSpec {
                 slot: MediaSlot::StageEntrySound { stage: id.clone() },
                 title: "Sound",
-                description: Some("A specific sound played on entry."),
-                empty_note: "No sound is played on entry.".into(),
+                description: None,
+                empty_note: "No sound is played when the stage starts.".into(),
             },
             stage.on_enter.sound,
             window,
@@ -419,8 +400,8 @@ impl TimelineView {
         let burst = stage.on_enter.popup_burst;
         let toggle_id = id.clone();
         let mut popups = div().flex().flex_col().gap_3().child(toggle_row(
-            "Spawn popups",
-            Some("Runs once when this stage begins.".into()),
+            "Spawn extra popups",
+            None,
             Toggle::new(
                 SharedString::from(format!("{id}-entry-burst")),
                 burst.is_some(),
@@ -437,7 +418,7 @@ impl TimelineView {
             let count_id = id.clone();
             popups = popups.child(self.number_field(
                 "Number of popups",
-                Some("The user's popup limit still applies.".into()),
+                None,
                 Spec::new(format!("{id}-entry-burst-count"), count.to_string()),
                 None,
                 move |this, value, cx| {
@@ -453,13 +434,13 @@ impl TimelineView {
             ));
         }
         section(
-            "On entry",
+            "On stage start",
             "Fire these effects once, after the transition into this stage finishes.",
             None,
         )
         .child(splash)
         .child(sound)
-        .child(notification.child(note("Custom text sent as a desktop notification.")))
+        .child(notification)
         .child(popups)
         .into_any_element()
     }
@@ -731,11 +712,7 @@ impl TimelineView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut card = section(
-            "Events",
-            "Enable events and choose how frequently they spawn.",
-            None,
-        );
+        let mut card = section("Events", "", None);
         for (index, event) in EVENTS.into_iter().enumerate() {
             let mut row = self.schedule_editor(stage, previous, event, true, window, cx);
             if event.0 == EventKind::Prompt && stage.events.prompt.is_some() {
@@ -764,7 +741,7 @@ impl TimelineView {
             .gap_3()
             .child(toggle_row(
                 "Enforce prompt deadlines",
-                Some("Turn off to let prompts wait indefinitely.".into()),
+                None,
                 Toggle::new(
                     SharedString::from(format!("{id}-prompt-deadlines")),
                     prompt.timeouts_enabled,
@@ -781,8 +758,8 @@ impl TimelineView {
             let multiplier_id = id.clone();
             settings = settings.child(
                 self.number_field(
-                    "Time allowance",
-                    Some("Multiplies every prompt's explicit or automatic time limit.".into()),
+                    "Deadline multiplier",
+                    None,
                     Spec::new(
                         format!("{id}-prompt-multiplier"),
                         number_text(prompt.timeout_multiplier),
@@ -804,9 +781,11 @@ impl TimelineView {
         }
         let burst = prompt.popup_burst;
         let burst_id = id.clone();
+        settings = settings
+            .child(ui::section_title("On wrong answer or expired prompt").text_size(px(13.)));
         settings = settings.child(toggle_row(
-            "Spawn popups",
-            Some("Applied to wrong answers and expired prompts.".into()),
+            "Spawn extra popups",
+            None,
             Toggle::new(
                 SharedString::from(format!("{id}-prompt-burst")),
                 burst.is_some(),
@@ -824,7 +803,7 @@ impl TimelineView {
             settings = settings.child(
                 self.number_field(
                     "Number of popups",
-                    Some("The user's popup limit still applies.".into()),
+                    None,
                     Spec::new(format!("{id}-prompt-burst-count"), count.to_string()),
                     None,
                     move |this, value, cx| {
@@ -845,8 +824,8 @@ impl TimelineView {
             SlotSpec {
                 slot: MediaSlot::StagePromptSound { stage: id.clone() },
                 title: "Sound",
-                description: Some("A specific sound played for a wrong answer or timeout."),
-                empty_note: "No sound consequence.".into(),
+                description: None,
+                empty_note: "No sound played.".into(),
             },
             prompt.sound,
             window,
@@ -880,11 +859,7 @@ impl TimelineView {
             let on = *on;
             this.apply(cx, |session| session.set_stage_movement(&toggle_id, on));
         }));
-        let mut card = section(
-            "Moving windows",
-            "Control whether windows move around the screen.",
-            Some(toggle.into_any_element()),
-        );
+        let mut card = section("Moving windows", "", Some(toggle.into_any_element()));
         if let Some(movement) = &stage.movement {
             let previous_speed = |pick: fn(&shared::behaviour::Movement) -> Option<f64>| {
                 let text = previous

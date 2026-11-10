@@ -14,12 +14,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::*;
+use gpui_kit::Focusable as _;
 use gpui_kit::{
-    canvas, div, img, px, AnyView, App, ClickEvent, Context, Entity, FocusHandle, FontWeight,
-    ImageSource, KeyDownEvent, ObjectFit, Pixels, ScrollStrategy, SharedString, Subscription,
-    UniformListScrollHandle, Window,
+    canvas, div, img, px, relative, AnyView, App, ClickEvent, Context, Entity, FocusHandle,
+    FontWeight, ImageSource, KeyDownEvent, ObjectFit, Pixels, ScrollStrategy, SharedString,
+    Subscription, UniformListScrollHandle, Window,
 };
 use pack_editor_core::changes::Scope;
 use pack_editor_core::pack::MediaFile;
@@ -29,7 +31,7 @@ use pack_editor_core::session::library::{
 };
 use shared::encode::FileInfo;
 
-use super::inspector::{Inspector, InspectorEvent};
+use super::inspector::{self, Inspector, InspectorEvent};
 use super::thumbs::Thumbnails;
 use super::viewer::{Viewer, ViewerEvent};
 use super::{format_duration, format_size, TabState};
@@ -129,7 +131,14 @@ impl MediaBrowser {
                 window,
                 |this, input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Change) {
-                        this.filter.query = input.read(cx).value().to_string();
+                        // A pasted path, or invisible characters riding along with a name,
+                        // would match nothing: the field shows what's actually searched for.
+                        let typed = input.read(cx).value().to_string();
+                        let query = pack_editor_core::session::library::search_query(&typed);
+                        if query != typed {
+                            input.update(cx, |input, cx| input.replace_all(query.clone(), window, cx));
+                        }
+                        this.filter.query = query;
                         this.refresh(window, cx);
                     }
                 },
@@ -143,6 +152,7 @@ impl MediaBrowser {
                 },
             ),
         ];
+        subscriptions.extend(ui::track_focus_of(&search, window, cx));
         // The shell drops this view when another is shown: keep what the author set up here, and
         // take the thumbnails out of the atlas.
         subscriptions.push(cx.on_release_in(window, |this, window, cx| {
@@ -193,7 +203,8 @@ impl MediaBrowser {
         self.selection.retain(&list);
         self.list = Rc::new(list);
         if let Some(viewer) = &self.viewer {
-            viewer.update(cx, |viewer, cx| viewer.retain(window, cx));
+            let list = self.list.clone();
+            viewer.update(cx, |viewer, cx| viewer.sync(&list, window, cx));
         }
         self.sync_inspector(window, cx);
         cx.notify();
@@ -439,7 +450,8 @@ impl MediaBrowser {
             return;
         }
         let editor = self.editor.clone();
-        let viewer = cx.new(|cx| Viewer::new(editor, ids, id, walking_selection, window, cx));
+        let viewer =
+            cx.new(|cx| Viewer::new(editor, self.tab, ids, id, walking_selection, window, cx));
         let subscription = cx.subscribe_in(
             &viewer,
             window,
@@ -471,7 +483,7 @@ impl MediaBrowser {
 
     // ── Rendering ───────────────────────────────────────────────────────────────────────────
 
-    fn filter_menu(&self, menu: Menu, cx: &mut Context<Self>) -> impl IntoElement {
+    fn filter_menu(&self, menu: Menu, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (label, selected, kind) = match menu {
             Menu::Tags => ("Tags", &self.filter.tags, LabelKind::Tags),
             Menu::Artists => ("Artists", &self.filter.artists, LabelKind::Artists),
@@ -521,15 +533,15 @@ impl MediaBrowser {
         let popover = open.then(|| {
             let entity = cx.entity();
             let selected = selected.clone();
-            gpui_kit::deferred(
+            let layer = crate::ui::floating(
+                theme::CONTROL_COMPACT + px(4.),
+                false,
                 div()
                     .id(SharedString::from(format!("filter-menu-{label}")))
-                    .absolute()
-                    .top(theme::CONTROL_COMPACT + px(4.))
-                    .left_0()
+                    .occlude()
                     .w(px(220.))
                     .max_h(px(280.))
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .p_1()
                     .rounded(theme::RADIUS_MD)
                     .border_1()
@@ -542,12 +554,6 @@ impl MediaBrowser {
                         spread_radius: px(0.),
                         inset: false,
                     }])
-                    .on_mouse_down_out(move |_, _, cx| {
-                        close.update(cx, |this, cx| {
-                            this.menu = None;
-                            cx.notify();
-                        })
-                    })
                     .when(names.is_empty(), |this| {
                         this.child(div().px_2().py(px(6.)).child(ui::hint(match menu {
                             Menu::Tags => "No tags yet.",
@@ -589,13 +595,23 @@ impl MediaBrowser {
                                 })
                             })
                     })),
-            )
-            .with_priority(1)
+            );
+            let backdrop = ui::dismiss_layer("filter-menu-backdrop", window, move |_, cx| {
+                close.update(cx, |this, cx| {
+                    this.menu = None;
+                    cx.notify();
+                })
+            });
+            [backdrop.into_any_element(), layer.into_any_element()]
         });
-        div().relative().child(trigger).children(popover)
+        div()
+            .relative()
+            .child(trigger)
+            .children(popover.into_iter().flatten())
     }
 
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let search_focused = self.search.read(cx).focus_handle(cx).is_focused(window);
         let entity = cx.entity();
         let kind_or_role = if self.tab == MediaTab::Audio {
             let entity = entity.clone();
@@ -678,34 +694,10 @@ impl MediaBrowser {
             .gap_2()
             .border_b_1()
             .border_color(c(theme::BORDER))
-            .child(
-                div()
-                    .w(px(220.))
-                    .h(theme::CONTROL_COMPACT)
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded(theme::RADIUS_MD)
-                    .border_1()
-                    .border_color(c(theme::BORDER_STRONG))
-                    .bg(c(theme::BG))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(c(theme::MUTED))
-                            .child(gpui_kit::assets::IconName::Search),
-                    )
-                    .child(
-                        Input::new(&self.search)
-                            .appearance(false)
-                            .text_size(px(12.))
-                            .flex_1(),
-                    ),
-            )
+            .child(ui::search_field(&self.search, search_focused).w(px(220.)))
             .child(div().w(px(130.)).child(kind_or_role))
-            .child(self.filter_menu(Menu::Tags, cx))
-            .child(self.filter_menu(Menu::Artists, cx))
+            .child(self.filter_menu(Menu::Tags, window, cx))
+            .child(self.filter_menu(Menu::Artists, window, cx))
             .child(div().w(px(150.)).child(sort))
             .when(self.filter.is_active(), |this| {
                 this.child(
@@ -778,7 +770,10 @@ impl MediaBrowser {
                 .map(|row| {
                     let start = row * columns;
                     let end = (start + columns).min(list.len());
+                    // Full width, so `justify_between` spreads the tiles across the row as the
+                    // Svelte grid did, with any leftover width going between them.
                     div()
+                        .w_full()
                         .h(px(ROW_H))
                         .px(px(GRID_PAD))
                         .pt(px(GRID_GAP))
@@ -847,6 +842,7 @@ impl MediaBrowser {
                 .absolute()
                 .size_full(),
             )
+            .vertical_scrollbar(&self.scroll)
     }
 
     /// The Audio tab's list: one row per file with its role control.
@@ -903,6 +899,7 @@ impl MediaBrowser {
                 .absolute()
                 .size_full(),
             )
+            .vertical_scrollbar(&self.scroll)
     }
 }
 
@@ -943,8 +940,12 @@ fn tile(
             .flex()
             .flex_col()
             .items_center()
-            .gap_1()
-            .child(ui::label("Audio"))
+            .gap_2()
+            .child(
+                div()
+                    .text_color(c(theme::MUTED))
+                    .child(crate::icons::icon(gpui_kit::assets::IconName::Music).size(px(36.))),
+            )
             .child(ui::readout(format_duration(*duration)))
             .into_any_element(),
         (_, None) if missing => ui::readout("No preview").into_any_element(),
@@ -1041,9 +1042,10 @@ fn audio_row(
             .rounded(theme::RADIUS_SM)
             .text_size(px(11.5))
             .border_1()
+            // The chosen role is raised, not red: the accent belongs to selection.
             .when(on, |this| {
                 this.bg(c(theme::SURFACE_RAISED))
-                    .border_color(c(theme::ACCENT_HOVER))
+                    .border_color(c(theme::BORDER_STRONG))
                     .text_color(c(theme::TEXT))
             })
             .when(!on, |this| {
@@ -1063,6 +1065,7 @@ fn audio_row(
     div()
         .id(("audio-row", id as usize))
         .relative()
+        .w_full()
         .h(px(AUDIO_ROW_H))
         .px_4()
         .flex()
@@ -1088,8 +1091,15 @@ fn audio_row(
         .when(active, |this| this.border_1().border_color(c(theme::FOCUS)))
         .child(
             div()
-                .flex_1()
-                .min_w_0()
+                .flex_none()
+                .text_color(c(if active { theme::TEXT } else { theme::MUTED }))
+                .child(crate::icons::icon(gpui_kit::assets::IconName::Music).size(px(18.))),
+        )
+        .child(
+            div()
+                .w(relative(0.32))
+                .max_w(px(280.))
+                .min_w(px(130.))
                 .flex()
                 .flex_col()
                 .gap(px(3.))
@@ -1117,6 +1127,7 @@ fn audio_row(
                 .child(role_button("Background", !popup, false))
                 .child(role_button("Popup", popup, true)),
         )
+        .child(div().flex_1())
         .cursor_pointer()
         .on_click(move |event, window, cx| {
             cx.stop_propagation();
@@ -1145,7 +1156,7 @@ impl Render for MediaBrowser {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.toolbar(cx))
+            .child(self.toolbar(window, cx))
             .child(
                 div()
                     .id("media-body")
@@ -1157,7 +1168,14 @@ impl Render for MediaBrowser {
                         entity.update(cx, |this, cx| this.key_down(event, window, cx))
                     })
                     .child(body)
-                    .child(self.inspector.clone()),
+                    .child(ui::resizable_sidebar(
+                        "inspector",
+                        ui::Side::Right,
+                        px(inspector::WIDTH),
+                        (px(inspector::WIDTH_RANGE.0), px(inspector::WIDTH_RANGE.1)),
+                        self.inspector.clone(),
+                        cx,
+                    )),
             )
             .children(self.viewer.clone())
             .children(dialog)

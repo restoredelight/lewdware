@@ -168,6 +168,7 @@ pub struct Store {
     pub monitors_error: Option<String>,
     /// The supervisor's view of the schedule; `None` while no supervisor is reachable.
     pub schedule_status: Option<shared::ipc::control::ScheduleStatus>,
+    pub stop_shortcut: Option<shared::ipc::control::StopShortcutStatus>,
     /// Enabling or disabling scheduling is in flight (it registers OS autostart).
     pub schedule_enable_pending: bool,
     pub schedule_enable_error: Option<String>,
@@ -205,6 +206,7 @@ impl Store {
             monitors_error: None,
             update_url: None,
             schedule_status: None,
+            stop_shortcut: None,
             schedule_enable_pending: false,
             schedule_enable_error: None,
             schema: modes::Schema::default(),
@@ -253,9 +255,20 @@ impl Store {
                 .as_ref()
                 .map(EngineStatus::from_info)
                 .unwrap_or_default();
+            let shortcut = info.as_ref().map(|info| info.stop_shortcut.clone());
             let schedule = info.map(|info| info.schedule);
             if this
                 .update(cx, |this, cx| {
+                    if this.stop_shortcut != shortcut
+                        && (shortcut.is_some()
+                            || !matches!(
+                                this.stop_shortcut,
+                                Some(shared::ipc::control::StopShortcutStatus::Failed { .. })
+                            ))
+                    {
+                        this.stop_shortcut = shortcut;
+                        cx.notify();
+                    }
                     if this.schedule_status != schedule {
                         this.schedule_status = schedule;
                         cx.notify();
@@ -347,6 +360,29 @@ impl Store {
     pub fn dismiss_feedback(&mut self, task: &'static str, cx: &mut Context<Self>) {
         self.clear_feedback(task);
         cx.notify();
+    }
+
+    /// What the desktop bound the stop shortcut to, when the desktop owns the binding (the
+    /// GlobalShortcuts portal). The configured key is then only the suggestion made on the first
+    /// bind, and may not be what stops a session.
+    pub fn desktop_stop_trigger(&self) -> Option<&str> {
+        match &self.stop_shortcut {
+            Some(shared::ipc::control::StopShortcutStatus::Registered {
+                trigger,
+                managed_by_desktop: true,
+                ..
+            }) => Some(trigger),
+            _ => None,
+        }
+    }
+
+    /// The key combination that stops a session, as shown to the user: the desktop's binding
+    /// when it owns one, else the configured key.
+    pub fn stop_key_label(&self) -> Option<String> {
+        match self.desktop_stop_trigger() {
+            Some(trigger) => Some(trigger.to_string()),
+            None => Some(self.config.as_ref()?.stop_button.to_string()),
+        }
     }
 
     /// The file name of the selected pack.
@@ -699,6 +735,12 @@ impl Store {
             })
             .await
             .and_then(|r| r);
+            if result.is_ok() {
+                let _ = runtime::run(shared::ipc::control::request(
+                    &shared::ipc::control::Request::ReloadConfig,
+                ))
+                .await;
+            }
             if result.is_ok() && reload_schedule {
                 let _ = runtime::run(schedule::reload()).await;
             }

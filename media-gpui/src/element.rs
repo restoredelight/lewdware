@@ -63,6 +63,9 @@ fn checker_pixels(w: u32, h: u32, cell: u32) -> Vec<u8> {
 
 pub(crate) struct ImageElement {
     pub image: Arc<RenderImage>,
+    /// Halved copies of `image`, largest first: the smallest that still covers the drawn size
+    /// is painted, so a large image shown small isn't sampled jagged.
+    pub smaller: Vec<Arc<RenderImage>>,
     pub transparent: bool,
     pub images: Rc<RefCell<Images>>,
 }
@@ -126,25 +129,33 @@ impl Element for ImageElement {
                 height: DevicePixels(size.height.0),
             },
         );
+        let scale = window.scale_factor();
+        let (want_w, want_h) = (
+            (f32::from(bounds.size.width) * scale).ceil() as i32,
+            (f32::from(bounds.size.height) * scale).ceil() as i32,
+        );
+        let image = self
+            .smaller
+            .iter()
+            .rev()
+            .find(|copy| {
+                let size = copy.size(0);
+                size.width.0 >= want_w && size.height.0 >= want_h
+            })
+            .unwrap_or(&self.image)
+            .clone();
         let mut images = self.images.borrow_mut();
         if self.transparent {
             images.checker(window, bounds);
         }
-        match window.paint_image(
-            bounds,
-            bounds,
-            Corners::default(),
-            self.image.clone(),
-            0,
-            false,
-        ) {
+        match window.paint_image(bounds, bounds, Corners::default(), image.clone(), 0, false) {
             Ok(()) => {
                 if images
                     .painted
                     .as_ref()
-                    .is_none_or(|image| image.id != self.image.id)
+                    .is_none_or(|painted| painted.id != image.id)
                 {
-                    if let Some(old) = images.painted.replace(self.image.clone()) {
+                    if let Some(old) = images.painted.replace(image) {
                         let _ = window.drop_image(old);
                     }
                 }

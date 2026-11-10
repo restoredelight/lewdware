@@ -47,6 +47,9 @@ impl EventEmitter<CommitPending> for Editor {}
 pub struct SaveProgress {
     pub saved: usize,
     pub total: usize,
+    /// Held until the running import finishes: a first save or Save As moves the working copy,
+    /// which an import is still writing to.
+    pub waiting_for_import: bool,
 }
 
 pub struct Editor {

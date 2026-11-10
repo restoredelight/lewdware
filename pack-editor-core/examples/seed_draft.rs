@@ -98,12 +98,7 @@ fn thumbnail(n: usize) -> Result<Vec<u8>> {
     let image = image::RgbaImage::from_fn(100, 75, |x, y| {
         let band = ((x + y + n as u32 * 7) / 12).is_multiple_of(2);
         let shade = if band { 1.0 } else { 0.7 };
-        image::Rgba([
-            (r * shade) as u8,
-            (g * shade) as u8,
-            (b * shade) as u8,
-            255,
-        ])
+        image::Rgba([(r * shade) as u8, (g * shade) as u8, (b * shade) as u8, 255])
     });
     let mut out = Vec::new();
     image::codecs::webp::WebPEncoder::new_lossless(&mut out).encode(

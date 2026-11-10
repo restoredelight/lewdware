@@ -159,11 +159,7 @@ impl TimelineView {
                 })
             }),
         );
-        let timing = section(
-            "Timing",
-            "A zero-second transition changes everything immediately.",
-            None,
-        )
+        let timing = section("Timing", "", None)
         .child(field_grid(vec![
             duration.into_any_element(),
             easing.into_any_element(),
@@ -171,8 +167,8 @@ impl TimelineView {
 
         let mut gradual = section(
             "Gradual changes",
-            "Choose exactly which numeric values interpolate. All other changes take effect at \
-             the end.",
+            "Selected values will slowly transition between the two stages' values, rather than \
+             switching at the end.",
             None,
         )
         .when(instant, |this| this.opacity(0.6));

@@ -1084,7 +1084,14 @@ async fn save_pack<Guard: Send + 'static>(
             cx.notify();
         });
     };
-    set_progress(Some(SaveProgress::default()), cx);
+    let importing = editor.update(cx, |editor, _| editor.importing());
+    set_progress(
+        Some(SaveProgress {
+            waiting_for_import: destination.is_some() && importing,
+            ..SaveProgress::default()
+        }),
+        cx,
+    );
 
     // Saving somewhere new moves the working copy, so a running import finishes first (and no
     // new one starts until the save is done).
@@ -1098,10 +1105,15 @@ async fn save_pack<Guard: Send + 'static>(
         },
         None => None,
     };
+    set_progress(Some(SaveProgress::default()), cx);
 
     let (sender, mut progress) = futures::channel::mpsc::unbounded::<SaveProgress>();
     let on_progress = move |saved, total| {
-        let _ = sender.unbounded_send(SaveProgress { saved, total });
+        let _ = sender.unbounded_send(SaveProgress {
+            saved,
+            total,
+            waiting_for_import: false,
+        });
     };
     let work = {
         let pack = pack.clone();

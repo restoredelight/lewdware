@@ -11,6 +11,7 @@
 mod content;
 pub mod library;
 pub mod lifecycle;
+pub mod popup;
 mod timeline;
 
 use std::collections::{BTreeMap, BTreeSet};

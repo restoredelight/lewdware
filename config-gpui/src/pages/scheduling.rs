@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, Local, Utc};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -122,10 +123,11 @@ fn frequency_words(frequency: Frequency) -> String {
     }
 }
 
-fn length_words(length: SessionLength) -> String {
+/// The ", for N min" suffix of a rule summary; nothing when the session runs until stopped.
+fn length_suffix(length: SessionLength) -> String {
     match length {
-        SessionLength::UntilStopped => "until you stop it".into(),
-        SessionLength::Fixed { minutes } => format!("for {minutes} min"),
+        SessionLength::UntilStopped => String::new(),
+        SessionLength::Fixed { minutes } => format!(", for {minutes} min"),
     }
 }
 
@@ -136,9 +138,9 @@ fn rule_summary(rule: &Rule) -> String {
     match rule.trigger {
         Trigger::At { time } => {
             format!(
-                "{days} at {}, {}.",
+                "{days} at {}{}.",
                 time_text(time),
-                length_words(rule.length)
+                length_suffix(rule.length)
             )
         }
         Trigger::Rate { range, frequency } => {
@@ -149,9 +151,9 @@ fn rule_summary(rule: &Rule) -> String {
                 }
             };
             format!(
-                "{days}, {when}, about {}, {}.",
+                "{days}, {when}, about {}{}.",
                 frequency_words(frequency),
-                length_words(rule.length)
+                length_suffix(rule.length)
             )
         }
     }
@@ -243,7 +245,9 @@ pub struct SchedulingPage {
     store: Entity<Store>,
     /// Text fields by key (`<rule id>:<field>`, `quiet<i>:<field>`, `cooldown`). Each commits on
     /// Enter or leaving the field.
-    fields: HashMap<String, (Entity<InputState>, Subscription)>,
+    fields: HashMap<String, (Entity<InputState>, [Subscription; 3])>,
+    /// The text field with focus, for its border.
+    focused_input: Option<gpui_kit::EntityId>,
     /// Rules with their pack/mode overrides open. Closed by default: most rules want the defaults.
     expanded_overrides: HashSet<Uuid>,
     help_open: Option<Uuid>,
@@ -258,6 +262,7 @@ impl SchedulingPage {
         Self {
             store,
             fields: HashMap::new(),
+            focused_input: None,
             expanded_overrides: HashSet::new(),
             help_open: None,
             pending_removal: None,
@@ -316,14 +321,20 @@ impl SchedulingPage {
                 }
             },
         );
-        self.fields.insert(key, (input.clone(), subscription));
+        let [focus, blur] = ui::track_focused_input(
+            &input,
+            |this: &mut Self| &mut this.focused_input,
+            window,
+            cx,
+        );
+        self.fields
+            .insert(key, (input.clone(), [subscription, focus, blur]));
         input
     }
 
     fn time_field(
         &mut self,
         key: String,
-        label: &'static str,
         current: TimeOfDay,
         apply: impl Fn(&mut Self, TimeOfDay, &mut Context<Self>) + 'static,
         window: &mut Window,
@@ -340,7 +351,7 @@ impl SchedulingPage {
             window,
             cx,
         );
-        labelled(label, field_box(&input, None).w(px(120.)))
+        self.field_box(&input, None).w(px(84.)).into_any_element()
     }
 
     // Each argument is a distinct property of the field; a builder would add more than it saves.
@@ -369,7 +380,7 @@ impl SchedulingPage {
             window,
             cx,
         );
-        field_box(&input, suffix)
+        self.field_box(&input, suffix)
     }
 
     fn day_picker(
@@ -385,39 +396,39 @@ impl SchedulingPage {
             "Days",
             div()
                 .flex()
-                .self_start()
-                .overflow_hidden()
-                .rounded(theme::RADIUS_SM)
-                .border_1()
-                .border_color(c(theme::BORDER))
+                .flex_wrap()
+                .gap_1()
                 .children(DAY_LABELS.iter().enumerate().map(|(index, label)| {
                     let on = days[index];
                     let on_pick = on_pick.clone();
+                    // Each day is its own toggle. On: raised surface inside a carmine edge, so
+                    // the accent stays in the outline and never fills.
                     div()
                         .id(SharedString::from(format!("{id}-{index}")))
-                        .h(px(32.))
+                        .h(theme::CONTROL_COMPACT)
                         .w(px(44.))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .when(index < 6, |this| {
-                            this.border_r_1().border_color(c(theme::BORDER))
-                        })
-                        .font_family(theme::FONT_MONO)
-                        .text_size(px(11.))
+                        .rounded(theme::RADIUS_SM)
+                        .border_1()
+                        .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .cursor_pointer()
                         .map(|this| {
-                            // Selected: raised surface with a carmine underline, never a fill.
                             if on {
                                 this.bg(c(theme::SURFACE_RAISED))
-                                    .text_color(c(theme::TEXT))
-                                    .border_b_2()
                                     .border_color(c(theme::ACCENT_HOVER))
+                                    .text_color(c(theme::TEXT))
                             } else {
                                 this.bg(c(theme::BG))
+                                    .border_color(c(theme::BORDER))
                                     .text_color(c(theme::MUTED))
-                                    .hover(|style| style.text_color(c(theme::TEXT)))
+                                    .hover(|style| {
+                                        style
+                                            .border_color(c(theme::BORDER_STRONG))
+                                            .text_color(c(theme::TEXT))
+                                    })
                             }
                         })
                         .child(*label)
@@ -427,7 +438,9 @@ impl SchedulingPage {
         )
     }
 
-    fn segmented<T: Copy + PartialEq + 'static>(
+    /// One of a few named options, as a dropdown. Sits at the start of a row so the fields it
+    /// governs can follow it on the same line.
+    fn choice<T: Copy + PartialEq + 'static>(
         &self,
         id: impl Into<SharedString>,
         options: &[(T, &'static str)],
@@ -435,45 +448,26 @@ impl SchedulingPage {
         on_pick: impl Fn(&mut Self, T, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let id: SharedString = id.into();
-        let on_pick = std::rc::Rc::new(on_pick);
+        let page = cx.entity();
         div()
+            .w(px(176.))
+            .flex_none()
             .flex()
-            .self_start()
-            .p(px(2.))
-            .rounded(theme::RADIUS_MD)
-            .border_1()
-            .border_color(c(theme::BORDER))
-            .bg(c(theme::BG))
-            .children(options.iter().enumerate().map(|(index, &(value, label))| {
-                let selected = value == current;
-                let on_pick = on_pick.clone();
-                div()
-                    .id(SharedString::from(format!("{id}-{index}")))
-                    .h(px(28.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .rounded(theme::RADIUS_SM)
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .map(|this| {
-                        if selected {
-                            this.bg(c(theme::SURFACE_RAISED))
-                                .text_color(c(theme::TEXT))
-                                .border_b_2()
-                                .border_color(c(theme::ACCENT_HOVER))
-                        } else {
-                            this.text_color(c(theme::MUTED))
-                                .hover(|style| style.text_color(c(theme::TEXT)))
-                        }
-                    })
-                    .child(label)
-                    .when(!selected, |this| {
-                        this.on_click(cx.listener(move |this, _, _, cx| on_pick(this, value, cx)))
-                    })
-            }))
+            .child(
+                ui::Select::new(
+                    id.into(),
+                    current,
+                    options
+                        .iter()
+                        .map(|&(value, label)| SelectOption::new(value, label))
+                        .collect(),
+                )
+                .on_change(move |value, _, cx| {
+                    if value != current {
+                        page.update(cx, |this, cx| on_pick(this, value, cx));
+                    }
+                }),
+            )
             .into_any_element()
     }
 
@@ -501,7 +495,7 @@ impl SchedulingPage {
                     s.budget_remaining, s.budget_total
                 );
                 if let Some(next) = s.next_opportunity {
-                    line.push_str(&format!(" · not before {}", format_instant(next)));
+                    line.push_str(&format!(", not before {}", format_instant(next)));
                 }
                 line
             }
@@ -598,7 +592,7 @@ impl SchedulingPage {
             cx,
         );
 
-        let timing_picker = self.segmented(
+        let timing_picker = self.choice(
             format!("timing-{id}"),
             &[
                 (Timing::At, "At a set time"),
@@ -617,7 +611,6 @@ impl SchedulingPage {
             Timing::AllDay => None,
             Timing::At => Some(self.time_field(
                 format!("{id}:at"),
-                "Time",
                 range_start(rule),
                 move |this, time, cx| {
                     this.edit_rule(id, cx, |rule| rule.trigger = Trigger::At { time })
@@ -628,7 +621,6 @@ impl SchedulingPage {
             Timing::Between => {
                 let from = self.time_field(
                     format!("{id}:from"),
-                    "From",
                     range_start(rule),
                     move |this, from, cx| {
                         this.edit_rule(id, cx, |rule| {
@@ -646,7 +638,6 @@ impl SchedulingPage {
                 );
                 let to = self.time_field(
                     format!("{id}:to"),
-                    "Until",
                     range_end(rule),
                     move |this, to, cx| {
                         this.edit_rule(id, cx, |rule| {
@@ -662,14 +653,7 @@ impl SchedulingPage {
                     window,
                     cx,
                 );
-                Some(
-                    div()
-                        .flex()
-                        .gap_3()
-                        .child(from)
-                        .child(to)
-                        .into_any_element(),
-                )
+                Some(time_range(from, to))
             }
         };
 
@@ -723,6 +707,53 @@ impl SchedulingPage {
                     }),
                 );
                 let help_open = self.help_open == Some(id);
+                let help = div()
+                    .relative()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("help-{id}")))
+                            .size(px(20.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(c(if help_open {
+                                theme::FOCUS
+                            } else {
+                                theme::BORDER_STRONG
+                            }))
+                            .text_size(px(10.))
+                            .text_color(c(theme::MUTED))
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(c(theme::TEXT)))
+                            .child("?")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.help_open = if this.help_open == Some(id) {
+                                    None
+                                } else {
+                                    Some(id)
+                                };
+                                cx.notify();
+                            })),
+                    )
+                    .when(help_open, |this| {
+                        let close = cx.entity();
+                        this.child(ui::dismiss_layer("help-backdrop", window, move |_, cx| {
+                            close.update(cx, |this, cx| {
+                                this.help_open = None;
+                                cx.notify();
+                            })
+                        }))
+                        .child(ui::floating(
+                            px(24.),
+                            false,
+                            ui::popover_surface()
+                                .w(px(320.))
+                                .p_3()
+                                .child(ui::hint(RATE_EXPLANATION)),
+                        ))
+                    });
                 Some(
                     div()
                         .flex()
@@ -734,43 +765,8 @@ impl SchedulingPage {
                                 .items_center()
                                 .gap_1()
                                 .child(small_label("How often"))
-                                .child(
-                                    div()
-                                        .id(SharedString::from(format!("help-{id}")))
-                                        .size(px(20.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .border_1()
-                                        .border_color(c(theme::BORDER_STRONG))
-                                        .text_size(px(10.))
-                                        .text_color(c(theme::MUTED))
-                                        .cursor_pointer()
-                                        .hover(|style| style.text_color(c(theme::TEXT)))
-                                        .child("?")
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.help_open = if this.help_open == Some(id) {
-                                                None
-                                            } else {
-                                                Some(id)
-                                            };
-                                            cx.notify();
-                                        })),
-                                ),
+                                .child(help),
                         )
-                        .when(help_open, |this| {
-                            this.child(
-                                div()
-                                    .max_w(px(320.))
-                                    .p_3()
-                                    .rounded(theme::RADIUS_MD)
-                                    .border_1()
-                                    .border_color(c(theme::BORDER_STRONG))
-                                    .bg(c(theme::SURFACE_RAISED))
-                                    .child(ui::hint(RATE_EXPLANATION)),
-                            )
-                        })
                         .child(div().flex().items_center().gap_2().child(count).child(kind))
                         .into_any_element(),
                 )
@@ -779,7 +775,7 @@ impl SchedulingPage {
         };
 
         let fixed = matches!(rule.length, SessionLength::Fixed { .. });
-        let length_picker = self.segmented(
+        let length_picker = self.choice(
             format!("length-{id}"),
             &[(false, "Until I stop it"), (true, "For a set time")],
             fixed,
@@ -795,15 +791,14 @@ impl SchedulingPage {
             },
             cx,
         );
-        let length_detail = match rule.length {
-            SessionLength::Fixed { minutes } => labelled(
-                "Minutes",
+        let minutes: Option<AnyElement> = match rule.length {
+            SessionLength::Fixed { minutes } => Some(
                 self.number_field(
                     format!("{id}:minutes"),
                     minutes,
                     1,
                     1440,
-                    None,
+                    Some("min"),
                     move |this, minutes, cx| {
                         this.edit_rule(id, cx, |rule| {
                             rule.length = SessionLength::Fixed { minutes }
@@ -812,12 +807,10 @@ impl SchedulingPage {
                     window,
                     cx,
                 )
-                .w(px(120.))
+                .w(px(96.))
                 .into_any_element(),
             ),
-            SessionLength::UntilStopped => {
-                ui::hint("Runs until you stop it or quiet hours begin.").into_any_element()
-            }
+            SessionLength::UntilStopped => None,
         };
 
         let overrides = self.overrides(rule, cx);
@@ -863,14 +856,21 @@ impl SchedulingPage {
                     .flex_col()
                     .gap_2()
                     .child(small_label("When"))
-                    .child(timing_picker)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .child(timing_picker)
+                            .children(times),
+                    )
                     .child(ui::hint(if timing == Timing::At {
                         "Starts at exactly this time, whether or not you're at your computer."
                     } else {
-                        "Starts at an unpredictable moment, chosen while you're actually using the computer. Lewdware won't tell you when."
+                        "Tries to choose a random time while you're at your computer."
                     })),
             )
-            .children(times)
             .children(frequency)
             .child(
                 div()
@@ -878,8 +878,19 @@ impl SchedulingPage {
                     .flex_col()
                     .gap_2()
                     .child(small_label("Session length"))
-                    .child(length_picker)
-                    .child(length_detail),
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(length_picker)
+                            .children(minutes),
+                    )
+                    .when(fixed, |this| {
+                        this.child(ui::hint(
+                            "Ends on its own after this long, or sooner if you stop it or quiet hours begin.",
+                        ))
+                    }),
             )
             .child(overrides)
             .when_some(warning, |this, warning| {
@@ -923,7 +934,7 @@ impl SchedulingPage {
         let summary = if overrides.mode.is_none() && overrides.pack_path.is_none() {
             "Uses the default pack and mode".to_string()
         } else {
-            format!("{pack_label} · {mode_label}")
+            format!("{pack_label}, {mode_label}")
         };
 
         let mut options = vec![SelectOption::new(None, "Default mode")];
@@ -952,11 +963,11 @@ impl SchedulingPage {
                     .text_color(c(theme::MUTED))
                     .hover(|style| style.text_color(c(theme::TEXT)))
                     .child(ui::readout(summary))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .child(if expanded { "▴" } else { "▾" }),
-                    )
+                    .child(div().text_size(px(12.)).child(if expanded {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.expanded_overrides.remove(&id) {
                             this.expanded_overrides.insert(id);
@@ -1105,7 +1116,6 @@ impl SchedulingPage {
         );
         let start = self.time_field(
             format!("{prefix}start"),
-            "From",
             quiet.start,
             move |this, start, cx| {
                 this.edit(cx, |schedule| {
@@ -1119,7 +1129,6 @@ impl SchedulingPage {
         );
         let end = self.time_field(
             format!("{prefix}end"),
-            "Until",
             quiet.end,
             move |this, end, cx| {
                 this.edit(cx, |schedule| {
@@ -1178,7 +1187,7 @@ impl SchedulingPage {
                     ),
             )
             .child(days)
-            .child(div().flex().gap_3().child(start).child(end))
+            .child(labelled("Hours", time_range(start, end)))
             .when_some(warning, |this, warning| {
                 this.child(
                     div()
@@ -1217,7 +1226,7 @@ impl SchedulingPage {
                             .flex_col()
                             .gap_1()
                             .child(ui::section_title(title))
-                            .child(ui::hint(hint)),
+                            .when(!hint.is_empty(), |this| this.child(ui::hint(hint))),
                     )
                     .children(action.map(|action| div().flex_none().child(action))),
             )
@@ -1305,25 +1314,50 @@ fn labelled(label: &'static str, control: impl IntoElement) -> AnyElement {
         .into_any_element()
 }
 
-fn field_box(input: &Entity<InputState>, suffix: Option<&'static str>) -> gpui_kit::Div {
+/// Two times on one line: "09:00 to 17:00".
+fn time_range(from: AnyElement, to: AnyElement) -> AnyElement {
     div()
-        .h(theme::CONTROL_COMPACT)
-        .px_2()
         .flex()
         .items_center()
-        .gap_1()
-        .rounded(theme::RADIUS_SM)
-        .border_1()
-        .border_color(c(theme::BORDER))
-        .bg(c(theme::BG))
+        .gap_2()
+        .child(from)
         .child(
-            Input::new(input)
-                .appearance(false)
-                .flex_1()
+            div()
                 .text_size(px(13.))
-                .font_family(theme::FONT_MONO),
+                .text_color(c(theme::MUTED))
+                .child("to"),
         )
-        .when_some(suffix, |this, suffix| this.child(ui::readout(suffix)))
+        .child(to)
+        .into_any_element()
+}
+
+/// Matches `ui::Select`'s height and outline, so a field can sit on the same line as one.
+impl SchedulingPage {
+    fn field_box(&self, input: &Entity<InputState>, suffix: Option<&'static str>) -> gpui_kit::Div {
+        div()
+            .h(theme::CONTROL_NORMAL)
+            // The input pads itself by 10px and scrolls its text to keep 10px clear of the caret, so
+            // extra padding here starves it: "09:00" scrolled out of view on arrow keys.
+            .pl(px(2.))
+            .pr(px(if suffix.is_some() { 10. } else { 2. }))
+            .flex()
+            .items_center()
+            .gap_1()
+            .rounded(theme::RADIUS_MD)
+            .border_1()
+            .border_color(ui::field_border(
+                self.focused_input == Some(input.entity_id()),
+            ))
+            .bg(c(theme::BG))
+            .child(
+                Input::new(input)
+                    .appearance(false)
+                    .flex_1()
+                    .text_size(px(13.))
+                    .font_family(theme::FONT_MONO),
+            )
+            .when_some(suffix, |this, suffix| this.child(ui::readout(suffix)))
+    }
 }
 
 impl Render for SchedulingPage {
@@ -1359,7 +1393,7 @@ impl Render for SchedulingPage {
             }
             sections.push(Self::section(
                 "Rules",
-                "Each rule decides when a session may start, how often, and how long it runs.",
+                "",
                 Some(add_rule("add-rule", cx)),
                 rules,
             ));
@@ -1403,16 +1437,6 @@ impl Render for SchedulingPage {
                     cx,
                 )
                 .w(px(112.));
-            sections.push(Self::section(
-                "Pacing",
-                "How long Lewdware waits before another scheduled session may start.",
-                None,
-                vec![row_card(
-                    "Gap before the next session",
-                    "Follows every scheduled session, however it ends, and keeps \"3 times a day\" from arriving as three in a row. Cancelling a grace notification starts the same gap.",
-                    cooldown.into_any_element(),
-                )],
-            ));
 
             let grace = Toggle::new("grace", schedule.grace_notification).on_change({
                 let this = cx.entity();
@@ -1423,20 +1447,27 @@ impl Render for SchedulingPage {
                 }
             });
             sections.push(Self::section(
-                "Grace notification",
-                "A few seconds' desktop notification before a scheduled session starts, with a Cancel action.",
+                "Timing",
+                "",
                 None,
-                vec![row_card(
-                    "Warn before starting",
-                    "Cancelling skips that session and starts the gap above.",
-                    grace.into_any_element(),
-                )],
+                vec![
+                    row_card(
+                        "Gap before the next session",
+                        "Cancelling a grace notification starts the same gap.",
+                        cooldown.into_any_element(),
+                    ),
+                    row_card(
+                        "Warn before starting",
+                        "Cancelling skips that session and starts the gap above.",
+                        grace.into_any_element(),
+                    ),
+                ],
             ));
         } else {
             sections.push(
                 empty_state(
                     "Scheduling is turned off",
-                    "Enable automatic scheduling above to review and edit rules, quiet hours, pacing, and startup notifications.",
+                    "Enable automatic scheduling to have Lewdware start at specific times.",
                 )
                 .into_any_element(),
             );
@@ -1448,12 +1479,7 @@ impl Render for SchedulingPage {
             .min_h_0()
             .flex()
             .flex_col()
-            .child(ui::page(
-                "scheduling",
-                "Scheduling",
-                "Start sessions on their own, at a set time or an unpredictable number of times within a range. Lewdware runs a background supervisor at login while scheduling is enabled.",
-                sections,
-            ))
+            .child(ui::page("scheduling", "Scheduling", "", sections))
             .children(dialog)
             .into_any_element()
     }

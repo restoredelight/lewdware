@@ -26,6 +26,44 @@ pulseaudio = { git = "https://github.com/restoredelight/pulseaudio-rs.git", rev 
 # Keep file/line backtraces without the large variable/type debug information.
 debug = "line-tables-only"
 
+# Image decoding unoptimised is 10-20x slower (a 1080p WebP took 2.2s to preview, against
+# 170ms optimised), which made previews and thumbnails slow in debug builds.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package."image-webp"]
+opt-level = 3
+
+[profile.dev.package."zune-jpeg"]
+opt-level = 3
+
+[profile.dev.package."zune-core"]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.gif]
+opt-level = 3
+
+[profile.dev.package.weezl]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package."simd-adler32"]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.fast_image_resize]
+opt-level = 3
+
 [profile.profiling]
 inherits = "release"
 debug = true

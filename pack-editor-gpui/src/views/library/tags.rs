@@ -13,7 +13,9 @@
 //! - **Text commits on Enter** (or the Rename button); Escape cancels.
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::*;
+use gpui_kit::Focusable as _;
 use gpui_kit::{
     div, px, AnyElement, Context, Entity, FocusHandle, FontWeight, SharedString, Subscription,
     Window,
@@ -55,6 +57,9 @@ struct Editing {
     _events: Subscription,
 }
 
+/// The row actions' column (four icon buttons), shared by the header so the columns line up.
+const ACTIONS_W: f32 = 140.;
+
 pub struct VocabularyView {
     kind: LabelKind,
     editor: Entity<Editor>,
@@ -67,6 +72,8 @@ pub struct VocabularyView {
     menu: Option<String>,
     error: Option<SharedString>,
     dialog_focus: FocusHandle,
+    /// The page's own focus, so Escape reaches it while a merge (which has no field) is open.
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -83,19 +90,26 @@ impl VocabularyView {
                 LabelKind::Artists => "Search artists...",
             })
         });
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe(&editor, |this, _, event: &EditorEvent, cx| {
                 let EditorEvent::Changed(changes) = event;
                 if changes.scopes.intersects(this.scopes()) {
                     this.reload(cx);
                 }
             }),
-            cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
+            cx.subscribe_in(&search, window, |_, input, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
+                    clean_search_field(
+                        input,
+                        pack_editor_core::session::library::clean_text,
+                        window,
+                        cx,
+                    );
                     cx.notify();
                 }
             }),
         ];
+        subscriptions.extend(ui::track_focus_of(&search, window, cx));
         let mut view = Self {
             kind,
             editor,
@@ -107,6 +121,7 @@ impl VocabularyView {
             menu: None,
             error: None,
             dialog_focus: cx.focus_handle(),
+            focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
         view.reload(cx);
@@ -194,6 +209,8 @@ impl VocabularyView {
             );
         if mode == Mode::Rename {
             input.update(cx, |input, cx| input.focus(window, cx));
+        } else {
+            window.focus(&self.focus, cx);
         }
         self.menu = None;
         self.error = None;
@@ -305,23 +322,27 @@ impl VocabularyView {
     }
 
     /// "Media": a way into the files carrying this name, per media tab, each with its count.
-    fn media_menu(&self, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
+    fn media_menu(&self, row: &Row, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self.menu.as_deref() == Some(row.name.as_str());
         let toggle = cx.entity();
         let name = row.name.clone();
-        let trigger = IconButton::new(SharedString::from(format!("media-{}", row.name)), gpui_kit::assets::IconName::Search, "Media")
-            .disabled(row.media.all == 0)
-            .on_click(move |_, _, cx| {
-                let name = name.clone();
-                toggle.update(cx, |this, cx| {
-                    this.menu = if this.menu.as_ref() == Some(&name) {
-                        None
-                    } else {
-                        Some(name)
-                    };
-                    cx.notify();
-                })
-            });
+        let trigger = IconButton::new(
+            SharedString::from(format!("media-{}", row.name)),
+            gpui_kit::assets::IconName::Search,
+            "Media",
+        )
+        .disabled(row.media.all == 0)
+        .on_click(move |_, _, cx| {
+            let name = name.clone();
+            toggle.update(cx, |this, cx| {
+                this.menu = if this.menu.as_ref() == Some(&name) {
+                    None
+                } else {
+                    Some(name)
+                };
+                cx.notify();
+            })
+        });
         let menu = open.then(|| {
             let close = cx.entity();
             let entries = [
@@ -360,12 +381,12 @@ impl VocabularyView {
                         })
                 })
                 .collect();
-            gpui_kit::deferred(
+            let menu = crate::ui::floating(
+                theme::CONTROL_COMPACT + px(4.),
+                true,
                 div()
                     .id("media-menu")
-                    .absolute()
-                    .top(theme::CONTROL_COMPACT + px(4.))
-                    .right_0()
+                    .occlude()
                     .w(px(180.))
                     .p_1()
                     .flex()
@@ -381,20 +402,23 @@ impl VocabularyView {
                         spread_radius: px(0.),
                         inset: false,
                     }])
-                    .on_mouse_down_out(move |_, _, cx| {
-                        close.update(cx, |this, cx| {
-                            this.menu = None;
-                            cx.notify();
-                        })
-                    })
                     .children(items),
-            )
-            .with_priority(1)
+            );
+            let backdrop = ui::dismiss_layer("media-menu-backdrop", window, move |_, cx| {
+                close.update(cx, |this, cx| {
+                    this.menu = None;
+                    cx.notify();
+                })
+            });
+            [backdrop.into_any_element(), menu.into_any_element()]
         });
-        div().relative().child(trigger).children(menu)
+        div()
+            .relative()
+            .child(trigger)
+            .children(menu.into_iter().flatten())
     }
 
-    fn row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
+    fn row(&self, index: usize, row: &Row, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let id = |what: &str| SharedString::from(format!("{what}-{}", row.name));
         let (rename, merge, delete) = (cx.entity(), cx.entity(), cx.entity());
         let (rename_name, merge_name, delete_row) =
@@ -425,12 +449,12 @@ impl VocabularyView {
             )
             .child(
                 div()
-                    .w(px(140.))
+                    .w(px(ACTIONS_W))
                     .flex()
                     .items_center()
                     .justify_end()
                     .gap(px(2.))
-                    .child(self.media_menu(row, cx))
+                    .child(self.media_menu(row, window, cx))
                     .child(
                         IconButton::new(id("rename"), gpui_kit::assets::IconName::Pencil, "Rename")
                             .on_click(move |_, window, cx| {
@@ -499,7 +523,6 @@ impl VocabularyView {
         let field = match editing.mode {
             Mode::Rename => div()
                 .h(theme::CONTROL_COMPACT)
-                .px_2()
                 .flex()
                 .items_center()
                 .rounded(theme::RADIUS_SM)
@@ -593,17 +616,22 @@ impl VocabularyView {
     ) -> Option<impl IntoElement> {
         let row = self.deleting.as_ref()?;
         let noun = self.noun();
+        let count =
+            |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let files = count(row.media.all as u64, "file", "files");
+        let references = row.content + row.timeline;
         let description = match self.kind {
-            LabelKind::Tags => format!(
-                "This removes the tag from {} media item(s) and {} Content/Timeline reference(s). \
+            LabelKind::Tags if references > 0 => format!(
+                "This removes the tag from {files} and from {} in Content and the Timeline. \
                  No media files will be deleted.",
-                row.media.all,
-                row.content + row.timeline
+                count(references, "setting", "settings"),
             ),
-            LabelKind::Artists => format!(
-                "This removes the artist from {} media item(s). No media files will be deleted.",
-                row.media.all
-            ),
+            LabelKind::Tags => {
+                format!("This removes the tag from {files}. No media files will be deleted.")
+            }
+            LabelKind::Artists => {
+                format!("This removes the artist from {files}. No media files will be deleted.")
+            }
         };
         let (cancel, confirm, close) = (cx.entity(), cx.entity(), cx.entity());
         Some(ui::dialog(
@@ -638,6 +666,7 @@ impl VocabularyView {
 
 impl Render for VocabularyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let search_focused = self.search.read(cx).focus_handle(cx).is_focused(window);
         let (title, empty) = match self.kind {
             LabelKind::Tags => (
                 "Tags",
@@ -721,11 +750,11 @@ impl Render for VocabularyView {
                         .into_iter()
                         .map(|(label, width)| ui::readout(label).w(px(width))),
                 )
-                .child(div().w(px(286.)));
+                .child(div().w(px(ACTIONS_W)));
             let rows: Vec<AnyElement> = visible
                 .iter()
                 .enumerate()
-                .map(|(index, row)| self.row(index, row, cx))
+                .map(|(index, row)| self.row(index, row, window, cx))
                 .collect();
             ui::card().child(head).children(rows).into_any_element()
         };
@@ -753,10 +782,23 @@ impl Render for VocabularyView {
         });
         let dialog = self.delete_dialog(window, cx);
 
+        let escape = cx.entity();
         div()
             .id("vocabulary-page")
+            .track_focus(&self.focus)
+            .on_key_down(move |event, _, cx| {
+                if event.keystroke.key == "escape" {
+                    escape.update(cx, |this, cx| {
+                        if this.editing.is_some() || this.menu.is_some() {
+                            cx.stop_propagation();
+                            this.menu = None;
+                            this.cancel(cx);
+                        }
+                    })
+                }
+            })
             .size_full()
-            .overflow_y_scroll()
+            .overflow_y_scrollbar()
             .child(
                 div()
                     .mx_auto()
@@ -768,35 +810,30 @@ impl Render for VocabularyView {
                     .gap_5()
                     .child(
                         div().flex().items_end().justify_end().gap_6().child(
-                            div()
+                            ui::search_field(&self.search, search_focused)
                                 .flex_none()
-                                .w(px(220.))
-                                .h(theme::CONTROL_COMPACT)
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .rounded(theme::RADIUS_MD)
-                                .border_1()
-                                .border_color(c(theme::BORDER_STRONG))
-                                .bg(c(theme::BG))
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .text_color(c(theme::MUTED))
-                                        .child(gpui_kit::assets::IconName::Search),
-                                )
-                                .child(
-                                    Input::new(&self.search)
-                                        .appearance(false)
-                                        .text_size(px(12.))
-                                        .flex_1(),
-                                ),
+                                .w(px(220.)),
                         ),
                     )
                     .children(error)
                     .child(table),
             )
             .children(dialog)
+    }
+}
+
+/// Rewrites a search field's text with `clean` when that changes it, so a paste that brought
+/// invisible characters (or, searching file names, a whole path) shows what's searched for.
+/// See `pack_editor_core::session::library::{clean_text, search_query}`.
+pub(crate) fn clean_search_field(
+    input: &Entity<InputState>,
+    clean: fn(&str) -> String,
+    window: &mut Window,
+    cx: &mut gpui_kit::App,
+) {
+    let typed = input.read(cx).value().to_string();
+    let cleaned = clean(&typed);
+    if cleaned != typed {
+        input.update(cx, |input, cx| input.replace_all(cleaned, window, cx));
     }
 }

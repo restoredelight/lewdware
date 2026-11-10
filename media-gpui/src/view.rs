@@ -3,15 +3,22 @@ use crate::{
     element::{ImageElement, Images},
     worker::{Command, Event, Worker},
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Bounds, Context, FocusHandle, KeyDownEvent, MouseButton, Pixels, RenderImage, Subscription,
     Window, canvas, div, px, relative,
 };
 use shared_gpui::{
+    icons::icon,
     theme::{self, c},
-    ui::{self, Button, Size, Variant},
+    ui,
 };
+
+/// The controls bar's height under a video or audio preview, for callers sizing a box to hug the
+/// media: the picture gets whatever is left.
+pub const CONTROLS_HEIGHT: f32 = 61.;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -25,6 +32,8 @@ pub struct MediaView {
     worker: Option<Worker>,
     source: Option<PreviewSource>,
     image: Option<Arc<RenderImage>>,
+    /// Halved copies of a still `image`, largest first.
+    smaller: Vec<Arc<RenderImage>>,
     images: Rc<RefCell<Images>>,
     loading: bool,
     playing: bool,
@@ -38,6 +47,9 @@ pub struct MediaView {
     warning: Option<String>,
     focus: FocusHandle,
     seek_bounds: Rc<Cell<Bounds<Pixels>>>,
+    volume_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// Whether a timed preview draws its play/seek/volume bar. Off for a thumbnail-sized preview.
+    controls: bool,
     _release: Subscription,
 }
 
@@ -51,6 +63,7 @@ impl MediaView {
             worker: None,
             source: None,
             image: None,
+            smaller: Vec::new(),
             images: Rc::new(RefCell::new(Images::default())),
             loading: false,
             playing: false,
@@ -64,14 +77,23 @@ impl MediaView {
             warning: None,
             focus: cx.focus_handle(),
             seek_bounds: Rc::new(Cell::new(Bounds::default())),
+            volume_bounds: Rc::new(Cell::new(Bounds::default())),
+            controls: true,
             _release,
         }
+    }
+
+    /// Whether a video or audio preview shows its controls bar.
+    pub fn set_controls(&mut self, controls: bool, cx: &mut Context<Self>) {
+        self.controls = controls;
+        cx.notify();
     }
 
     pub fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.worker = None;
         self.source = None;
         self.image = None;
+        self.smaller.clear();
         self.images.borrow_mut().clear(window);
         self.loading = false;
         self.playing = false;
@@ -144,7 +166,8 @@ impl MediaView {
         }
     }
 
-    fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
+    /// The playback level, 0 to 1. Also what the volume control shows.
+    pub fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
         self.volume = volume.clamp(0., 1.);
         if self.volume > 0. {
             self.unmuted_volume = self.volume;
@@ -203,8 +226,13 @@ impl MediaView {
                         self.loading = false;
                     }
                 }
-                Event::Frame { image, position } => {
+                Event::Frame {
+                    image,
+                    smaller,
+                    position,
+                } => {
                     self.image = Some(image);
+                    self.smaller = smaller;
                     self.position = position;
                     self.loading = false;
                 }
@@ -215,6 +243,11 @@ impl MediaView {
                 Event::Ended => {
                     self.playing = false;
                     self.ended = true;
+                    // A frame's position is when it starts showing, so the last one reads a frame
+                    // short of the end; at the end, the bar should be full.
+                    if let Some(duration) = self.duration {
+                        self.position = duration;
+                    }
                 }
                 Event::Error(error) => self.fail(error, cx),
                 Event::Warning(warning) => self.warning = Some(warning),
@@ -236,43 +269,44 @@ impl MediaView {
             .map(|d| self.position.as_secs_f32() / d.as_secs_f32().max(0.001))
             .unwrap_or(0.)
             .clamp(0., 1.);
-        let button = |id, label| {
-            Button::new(id, label)
-                .variant(Variant::Quiet)
-                .size(Size::Compact)
-                .disabled(!enabled)
+        // Narrow (a portrait clip, the inspector): drop the volume bar and the duration rather
+        // than wrap, so the bar keeps its height (`CONTROLS_HEIGHT`). Measured off the seek bar,
+        // which spans the controls, as of the last frame.
+        let width = f32::from(self.seek_bounds.get().size.width);
+        let compact = width > 0. && width < 340.;
+        let failed = self.error.clone();
+        let time = if failed.is_some() {
+            "Can't play this file".to_string()
+        } else if compact {
+            clock(self.position)
+        } else {
+            format!(
+                "{} / {}",
+                clock(self.position),
+                self.duration.map(clock).unwrap_or_else(|| "--:--".into())
+            )
         };
+        let volume_bounds = self.volume_bounds.clone();
+        let set_volume_at = |this: &mut Self, x: Pixels, cx: &mut Context<Self>| {
+            let b = this.volume_bounds.get();
+            let fraction = ((x - b.origin.x) / b.size.width.max(px(1.))).clamp(0., 1.);
+            this.set_volume(fraction, cx);
+        };
+
         div()
             .flex_none()
+            .h(px(CONTROLS_HEIGHT))
             .flex()
             .flex_col()
-            .gap_2()
-            .p_3()
+            .gap_1()
+            .px_2()
+            .py_2()
             .border_t_1()
             .border_color(c(theme::BORDER))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        button("preview-play", if playing { "Pause" } else { "Play" })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle(cx))),
-                    )
-                    .child(
-                        button("preview-restart", "Restart")
-                            .on_click(cx.listener(|this, _, _, cx| this.seek(Duration::ZERO, cx))),
-                    )
-                    .child(div().flex_1())
-                    .child(ui::readout(format!(
-                        "{} / {}",
-                        clock(self.position),
-                        self.duration.map(clock).unwrap_or_else(|| "--:--".into())
-                    ))),
-            )
-            .child(
-                div()
                     .id("preview-seek")
+                    .flex_none()
                     .relative()
                     .h(px(12.))
                     .w_full()
@@ -288,6 +322,7 @@ impl MediaView {
                             .top(px(4.))
                             .h(px(4.))
                             .w_full()
+                            .rounded_full()
                             .bg(c(theme::BORDER_STRONG)),
                     )
                     .child(
@@ -296,6 +331,7 @@ impl MediaView {
                             .top(px(4.))
                             .h(px(4.))
                             .w(relative(fraction))
+                            .rounded_full()
                             .bg(c(theme::ACCENT)),
                     )
                     .on_mouse_down(
@@ -315,13 +351,44 @@ impl MediaView {
             )
             .child(
                 div()
+                    .flex_none()
+                    .h(px(28.))
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap_1()
                     .child(
-                        button(
+                        control(
+                            "preview-play",
+                            if playing {
+                                IconName::Pause
+                            } else {
+                                IconName::Play
+                            },
+                            if playing { "Pause" } else { "Play" },
+                            enabled,
+                            false,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle(cx))),
+                    )
+                    .child(
+                        control(
+                            "preview-restart",
+                            IconName::RotateCcw,
+                            "Restart",
+                            enabled,
+                            false,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.seek(Duration::ZERO, cx))),
+                    )
+                    .child(
+                        control(
                             "preview-loop",
-                            if looping { "Loop: on" } else { "Loop: off" },
+                            IconName::Repeat,
+                            // Not "Loop: on/off": a tooltip already open keeps its text, so it
+                            // read as the state before the click. The button's look shows it.
+                            "Loop",
+                            enabled,
+                            looping,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.looping = !this.looping;
@@ -331,27 +398,139 @@ impl MediaView {
                             cx.notify();
                         })),
                     )
+                    .child(
+                        div()
+                            .id("preview-time")
+                            .ml_1()
+                            .min_w_0()
+                            .child(
+                                ui::readout(time).truncate().when(failed.is_some(), |this| {
+                                    this.text_color(c(theme::DANGER))
+                                }),
+                            )
+                            .when_some(failed, |this, error| {
+                                this.tooltip(move |window, cx| {
+                                    Tooltip::new(error.clone()).build(window, cx)
+                                })
+                            }),
+                    )
                     .child(div().flex_1())
                     .child(
-                        button("preview-mute", if volume == 0. { "Unmute" } else { "Mute" })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let volume = if this.volume == 0. {
-                                    this.unmuted_volume
-                                } else {
-                                    0.
-                                };
-                                this.set_volume(volume, cx);
-                            })),
+                        control(
+                            "preview-mute",
+                            if volume == 0. {
+                                IconName::VolumeX
+                            } else {
+                                IconName::Volume2
+                            },
+                            if volume == 0. { "Unmute" } else { "Mute" },
+                            enabled,
+                            false,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let volume = if this.volume == 0. {
+                                this.unmuted_volume
+                            } else {
+                                0.
+                            };
+                            this.set_volume(volume, cx);
+                        })),
                     )
-                    .child(button("preview-quieter", "-").on_click(
-                        cx.listener(|this, _, _, cx| this.set_volume(this.volume - 0.1, cx)),
-                    ))
-                    .child(ui::readout(format!("Volume {:.0}%", volume * 100.)))
-                    .child(button("preview-louder", "+").on_click(
-                        cx.listener(|this, _, _, cx| this.set_volume(this.volume + 0.1, cx)),
-                    )),
+                    .when(!compact, |this| {
+                        this.child(
+                            div()
+                                .id("preview-volume")
+                                .flex_none()
+                                .relative()
+                                .w(px(64.))
+                                .h(px(12.))
+                                .cursor_pointer()
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(format!("Volume {:.0}%", volume * 100.))
+                                        .build(window, cx)
+                                })
+                                .child(
+                                    canvas(move |b, _, _| volume_bounds.set(b), |_, _, _, _| {})
+                                        .absolute()
+                                        .size_full(),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(4.))
+                                        .h(px(4.))
+                                        .w_full()
+                                        .rounded_full()
+                                        .bg(c(theme::BORDER_STRONG)),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top(px(4.))
+                                        .h(px(4.))
+                                        .w(relative(volume))
+                                        .rounded_full()
+                                        .bg(c(theme::TEXT)),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        move |this, event: &gpui_kit::MouseDownEvent, _, cx| {
+                                            set_volume_at(this, event.position.x, cx)
+                                        },
+                                    ),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    move |this, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                                        if event.pressed_button == Some(MouseButton::Left) {
+                                            set_volume_at(this, event.position.x, cx)
+                                        }
+                                    },
+                                )),
+                        )
+                    }),
             )
     }
+}
+
+/// A small icon button in the controls bar, its tooltip naming it. `active` lights it (loop on).
+fn control(
+    id: &'static str,
+    name: IconName,
+    tooltip: &'static str,
+    enabled: bool,
+    active: bool,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(theme::RADIUS_MD)
+        .border_1()
+        .text_color(c(if active { theme::TEXT } else { theme::MUTED }))
+        // On: a raised, outlined button, so it still reads as on under the pointer, where hover
+        // gives any button the raised surface.
+        .map(|this| {
+            if active {
+                this.bg(c(theme::SURFACE_RAISED))
+                    .border_color(c(theme::BORDER_STRONG))
+            } else {
+                this.border_color(gpui_kit::transparent_black())
+            }
+        })
+        .child(icon(name).size(px(15.)))
+        .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+        .when(!enabled, |this| this.opacity(0.4))
+        .when(enabled, |this| {
+            this.cursor_pointer().hover(|style| {
+                style
+                    .bg(c(theme::SURFACE_RAISED))
+                    .text_color(c(theme::TEXT))
+            })
+        })
 }
 
 impl Render for MediaView {
@@ -376,6 +555,7 @@ impl Render for MediaView {
         let content = if let Some(image) = &self.image {
             ImageElement {
                 image: image.clone(),
+                smaller: self.smaller.clone(),
                 transparent,
                 images: self.images.clone(),
             }
@@ -398,6 +578,11 @@ impl Render for MediaView {
                 }))
                 .into_any_element()
         };
+        // Audio has no picture, so no picture area: the controls are the preview.
+        let audio = self
+            .source
+            .as_ref()
+            .is_some_and(|s| s.kind == MediaKind::Audio);
         div()
             .id("media-preview")
             .track_focus(&self.focus)
@@ -406,8 +591,22 @@ impl Render for MediaView {
             .flex()
             .flex_col()
             .bg(c(theme::BG))
-            .child(div().flex_1().min_h_0().overflow_hidden().child(content))
-            .children(self.error.clone().map(|error| {
+            // Clicking the picture plays or pauses it, like a video player.
+            .when(!audio, |this| {
+                this.child(
+                    div()
+                        .id("preview-content")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .when(timed, |this| {
+                            this.on_click(cx.listener(|this, _, _, cx| this.toggle(cx)))
+                        })
+                        .child(content),
+                )
+            })
+            // Audio has no room for it: its controls bar says it can't play instead.
+            .children(self.error.clone().filter(|_| !audio).map(|error| {
                 div()
                     .p_3()
                     .text_size(px(12.))
@@ -419,7 +618,7 @@ impl Render for MediaView {
                     .clone()
                     .map(|warning| div().px_3().pb_2().child(ui::hint(warning))),
             )
-            .when(timed, |this| this.child(self.controls(cx)))
+            .when(timed && self.controls, |this| this.child(self.controls(cx)))
     }
 }
 

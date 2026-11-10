@@ -112,10 +112,7 @@ impl Shell {
         let running = store.engine.running;
         let busy = store.engine_action.is_some();
         let pack_name = store.pack_name();
-        let stop_key = store
-            .config
-            .as_ref()
-            .map(|config| config.stop_button.to_string().replace(" + ", "+"));
+        let stop_key = store.stop_key_label().map(|key| key.replace(" + ", "+"));
 
         let field = |label: &'static str, value: String| {
             div()
@@ -427,7 +424,7 @@ impl Shell {
                                 .text_color(c(theme::MUTED))
                                 .cursor_pointer()
                                 .hover(|style| style.text_color(c(theme::TEXT)))
-                                .child("✕")
+                                .child(gpui_kit::assets::IconName::Close)
                                 .on_click(move |_, _, cx| {
                                     entity.update(cx, |store, cx| store.dismiss_feedback(task, cx))
                                 }),

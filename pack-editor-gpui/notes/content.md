@@ -72,13 +72,13 @@ in `pack/tests/content.rs`.
 
 ## Not done
 
-- Previewing a slot's file at full size (the Tauri picker's click-to-preview); audio slots are
-  the timeline's.
+_Written at the merge (2026-11-09). Items done since have been removed; the README's "Known caveats" is the current list._
+
 - Thumbnails use `img(Arc<Image>)`, which gpui caches for the app's lifetime (100px WebPs, so
   small); not released when the view goes, unlike media-gpui's previews.
-- No keyboard Tab navigation between fields (nothing in the gpui editor has it yet).
 - Upload into a slot was not exercised in ui-check (it opens the desktop file dialog); its core
   path is covered by `slot_filled_by_import`'s test with `fill_media_slot`.
+- No keyboard Tab navigation between fields (nothing in the gpui editor has it yet).
 
 ## Changes outside owned files
 

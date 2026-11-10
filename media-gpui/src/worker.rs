@@ -44,6 +44,9 @@ pub(crate) enum Event {
     },
     Frame {
         image: Arc<RenderImage>,
+        /// Halved copies of a still image, largest first (see [`smaller_copies`]); empty for
+        /// video frames.
+        smaller: Vec<Arc<RenderImage>>,
         position: Duration,
     },
     Position(Duration),
@@ -94,6 +97,27 @@ impl Worker {
     }
 }
 
+/// The GPU samples an image linearly with no mipmaps, so drawing one at less than half its size
+/// skips source pixels and looks jagged. These are its successive halvings (each filtered from
+/// the last, down to 64px), for the element to draw the one nearest the size it's shown at.
+fn smaller_copies(full: &image::RgbaImage) -> Vec<image::RgbaImage> {
+    let mut copies: Vec<image::RgbaImage> = Vec::new();
+    loop {
+        let last = copies.last().unwrap_or(full);
+        let (w, h) = (last.width() / 2, last.height() / 2);
+        if w < 64 || h < 64 {
+            return copies;
+        }
+        // Channel order doesn't matter to the filter, so this works on BGRA as well.
+        let half = image::imageops::resize(last, w, h, image::imageops::FilterType::Triangle);
+        copies.push(half);
+    }
+}
+
+fn render_image(bgra: image::RgbaImage) -> Arc<RenderImage> {
+    Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(bgra)]))
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
@@ -137,19 +161,20 @@ fn run(
     }
     ffmpeg_next::init()?;
     if source.kind == MediaKind::Image {
-        let rgba = image::load_from_memory(&source.media.read()?)?.into_rgba8();
-        let native = rgba.dimensions();
-        let mut bytes = rgba.into_raw();
-        for pixel in bytes.chunks_exact_mut(4) {
+        let mut bgra = image::load_from_memory(&source.media.read()?)?.into_rgba8();
+        for pixel in bgra.chunks_exact_mut(4) {
             pixel.swap(0, 2);
         }
-        let image = Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
-            image::RgbaImage::from_raw(native.0, native.1, bytes).unwrap()
-        )]));
+        let smaller = smaller_copies(&bgra)
+            .into_iter()
+            .map(render_image)
+            .collect();
+        let image = render_image(bgra);
         if !cancelled.load(Ordering::Acquire) {
             let _ = events.send(Event::Ready { duration: None });
             let _ = events.send(Event::Frame {
                 image,
+                smaller,
                 position: Duration::ZERO,
             });
         }
@@ -292,6 +317,7 @@ fn run(
                     if let Some(frame) = frame {
                         let _ = events.send(Event::Frame {
                             image: frame.image,
+                            smaller: Vec::new(),
                             position: frame.pass_pts,
                         });
                     }

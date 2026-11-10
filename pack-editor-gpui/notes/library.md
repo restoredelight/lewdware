@@ -112,9 +112,8 @@ The behaviour reference was the Tauri editor (`pack-editor/src/lib/MediaGrid.sve
 
 ## Not done
 
-- **Popup attributes editor** (weight, scale, placement, monitor, caption, video loop/audio/
-  volume -- the Tauri viewer's rail and `PopupPlacement`). The Popups inspector says so; the
-  viewer only looks.
+_Written at the merge (2026-11-09). Items done since have been removed; the README's "Known caveats" is the current list._
+
 - **Inline per-row audio players** in the Audio list. The inspector's preview is the player
   (select a row, press play there). Making a row's play button start playback would need a
   `play` entry point on `MediaView` that works before the worker is ready (media-gpui).
@@ -123,12 +122,11 @@ The behaviour reference was the Tauri editor (`pack-editor/src/lib/MediaGrid.sve
   take-the-session-out mechanism the design describes (Shell track's `editor.rs`).
 - **Context menu** on tiles (copy file name, edit popup, delete, select all, clear). Everything in
   it is reachable from the keyboard and the inspector.
-- **Resizable inspector** (fixed at 320 px) and key-repeat pacing (`keyRepeat.ts`); held arrows
+- Key-repeat pacing (`keyRepeat.ts`); held arrows
   move at the OS repeat rate.
 - **Remembering the last media tab** across sessions, and per-tab scroll position.
 - "Used as" for Content/Timeline targets switches view but doesn't select/focus the slot (needs
   those tracks' views to accept a reveal).
-- Imports (empty states say importing isn't ported; that's the Shell track's).
 
 ## Changes outside owned files
 

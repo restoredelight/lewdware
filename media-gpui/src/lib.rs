@@ -11,5 +11,5 @@ mod view;
 mod worker;
 
 pub use source::MediaSource;
-pub use view::MediaView;
+pub use view::{CONTROLS_HEIGHT, MediaView};
 pub use worker::{MediaKind, PreviewSource};

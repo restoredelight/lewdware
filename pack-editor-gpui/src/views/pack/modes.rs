@@ -216,7 +216,7 @@ impl ModesView {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
-            .join(" · ");
+            .join(", ");
             let details = if details.is_empty() {
                 "No author or version provided".to_string()
             } else {
@@ -250,7 +250,7 @@ impl ModesView {
                         )
                         .child(ui::hint(details).text_size(px(11.)).truncate())
                         .child(ui::readout(format!(
-                            "{} · {}",
+                            "{}, {}",
                             plural(mode.option_count, "option", "options"),
                             format_size(mode.size)
                         ))),

@@ -107,6 +107,19 @@ Things that are knowingly wrong or missing, to fix before this replaces `config/
   QWERTY, which is exact for non-letter keys and QWERTY-family layouts. On AZERTY or Dvorak, a
   letter is recorded at its QWERTY position. Fixing it needs the platform scan code, which gpui
   doesn't expose.
+- **On the GlobalShortcuts portal, the desktop owns the stop shortcut.** The supervisor passes
+  the configured key only as `preferred_trigger`. KDE uses it on the first bind and keeps its
+  stored trigger after that (`~/.config/kglobalshortcutsrc`, `[com.lewdware.supervisor]`), which
+  is how global shortcuts are meant to work. The supervisor reports this as
+  `StopShortcutStatus::Registered { managed_by_desktop: true, .. }`. Safety then shows the
+  desktop's trigger read-only instead of the recorder, and the session control shows that trigger
+  too. Where the portal is version 2 (`can_configure`), "Change..." sends
+  `Request::ConfigureStopShortcut`, and the supervisor calls `ConfigureShortcuts` on its session,
+  which opens the desktop's own settings for the shortcut (on KDE, System Settings → Shortcuts).
+  Older portals get a line pointing to the desktop's settings instead. The configured key still seeds the first bind,
+  but it can't be changed from here until the desktop forgets its binding. Checked by build and
+  unit tests only: the headless check has no supervisor, so the desktop-managed view hasn't been
+  seen on screen. GNOME's gsettings path and X11/Windows/macOS still use the recorded key.
 - **macOS Input Monitoring prompt not ported.** `backend::hardware::input_monitoring_granted`
   always reports granted, so the warning banner and "Open Settings" flow never show.
 - **A pack that fails to load at startup is only logged.** The page then shows the configured
@@ -120,8 +133,6 @@ Things that are knowingly wrong or missing, to fix before this replaces `config/
 - **Numeric and time fields commit on Enter or leaving the field**, not on every keystroke as
   the webview's did. Scheduling's time fields are plain text (`HH:MM`) rather than a native time
   picker; invalid input reverts.
-- **Clicking outside an open dropdown also clicks what's underneath**, where a native menu would
-  only close.
 - **No window icon set.** Tauri set one at runtime; gpui doesn't offer that on Linux, where the
   icon comes from the desktop file matching the `lewdware-config` app id.
 
@@ -141,7 +152,8 @@ Things that are knowingly wrong or missing, to fix before this replaces `config/
 - **No echo frame on the task status toast or menus.** They have the hard offset shadow; only
   the dialog has the spawned-window echo from `DESIGN.md`.
 - **Enum descriptions aren't shown.** The webview's select showed an enum member's
-  `description` under its label; this one shows the label only.
+  `description` under its label. `ui::SelectOption::description` supports it now, but
+  `pages/pack_mode.rs` doesn't pass the member's description through yet.
 - **A nav item can keep its hover colour** after the pointer jumps straight to another item.
   Seen only under xdotool, which moves the pointer instantly; probably not reachable by hand.
 

@@ -12,6 +12,7 @@
 
 pub mod content;
 pub mod library;
+pub mod media_slot;
 pub mod pack;
 pub mod timeline;
 

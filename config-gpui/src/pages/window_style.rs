@@ -52,10 +52,6 @@ impl Render for WindowStylePage {
                 "{} has no dark version and is always drawn light.",
                 t.label
             )),
-            Some(t) if t.matches_system => Some(
-                "Windows are drawn to look like this machine's own, so a pack you share won't look the same on someone else's."
-                    .to_string(),
-            ),
             _ => None,
         };
 
@@ -80,11 +76,11 @@ impl Render for WindowStylePage {
             let choice = entry.choice;
             let entity = self.store.clone();
             let tag = if entry.matches_system {
-                Some(if choice.name() == "native-retro" {
-                    "your system, retro"
+                if choice.name() == "native-retro" {
+                    None
                 } else {
-                    "matches your system"
-                })
+                    Some("matches your system")
+                }
             } else if !entry.supports_dark {
                 Some("light only")
             } else {
@@ -169,16 +165,7 @@ impl Render for WindowStylePage {
                     .items_end()
                     .justify_between()
                     .gap_4()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(ui::section_title("Theme"))
-                            .child(ui::hint(
-                                "Each preview is live -- hover its close button, press a button, or type in the field.",
-                            )),
-                    )
+                    .child(ui::section_title("Theme"))
                     .child(div().w(px(176.)).flex().child(appearance_select)),
             )
             .child(
@@ -192,7 +179,7 @@ impl Render for WindowStylePage {
         ui::page(
             "window-style",
             "Window style",
-            "Choose how popup frames, buttons and text fields look. A mode can still choose a style for a particular window where the look is part of what it's doing.",
+            "",
             [section.into_any_element()],
         )
         .into_any_element()

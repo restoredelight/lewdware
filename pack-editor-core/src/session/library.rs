@@ -27,12 +27,16 @@ impl Session {
     }
 
     pub fn rename_file(&mut self, id: u64, name: &str) -> Result<Applied<()>> {
-        self.write(WriteKind::Edit, |c| ops::library::set_file_name(c, id, name))
+        self.write(WriteKind::Edit, |c| {
+            ops::library::set_file_name(c, id, name)
+        })
     }
 
     /// Popup audio when `popup`, background audio otherwise.
     pub fn set_popup_audio(&mut self, ids: &[u64], popup: bool) -> Result<Applied<()>> {
-        self.write(WriteKind::Edit, |c| ops::library::set_popup_audio(c, ids, popup))
+        self.write(WriteKind::Edit, |c| {
+            ops::library::set_popup_audio(c, ids, popup)
+        })
     }
 
     /// A track's own level. `None` (or 1.0, which means the same) is "no opinion".
@@ -122,6 +126,78 @@ pub enum SortKey {
     Created,
     Name,
     Size,
+}
+
+/// Text pasted into a field without what it can't mean there: control characters (a `\r` left
+/// by a CRLF clipboard; the input already drops `\n`) and invisible formatting characters
+/// (zero-width spaces and joiners, direction marks, soft hyphens, byte order marks), which
+/// file managers and web pages carry along and a field shows as nothing.
+pub fn clean_text(text: &str) -> String {
+    text.chars()
+        .filter(|&c| !c.is_control() && !is_invisible_format(c))
+        .collect()
+}
+
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
+}
+
+/// What the media search should look for, given what's in its field: [`clean_text`], and a
+/// path or `file://` URL (what copying a file in a file manager puts on the clipboard) cut
+/// down to its file name, since names are all the search matches and none contains a `/`.
+pub fn search_query(text: &str) -> String {
+    let text = clean_text(text);
+    let trimmed = text.trim();
+    let url = trimmed.strip_prefix("file://");
+    let windows_path = trimmed.as_bytes().get(1..3) == Some(b":\\".as_slice());
+    let is_path = url.is_some()
+        || trimmed.starts_with('/')
+        || trimmed.starts_with("~/")
+        || windows_path;
+    if !is_path {
+        return text;
+    }
+    let name = trimmed
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or("");
+    if url.is_some() {
+        percent_decode(name)
+    } else {
+        name.to_string()
+    }
+}
+
+/// `%20` and the like, as a `file://` URL spells a name. Anything malformed is kept as written.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (bytes[i], bytes.get(i + 1), bytes.get(i + 2)) {
+            (b'%', Some(&hi), Some(&lo)) if hex(hi).is_some() && hex(lo).is_some() => {
+                out.push((hex(hi).unwrap() * 16 + hex(lo).unwrap()) as u8);
+                i += 3;
+            }
+            (byte, _, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// One tab's search, filters and sort. `Default` is "everything, oldest first".
@@ -553,4 +629,32 @@ pub fn label_counts(index: &MediaIndex, kind: LabelKind) -> BTreeMap<String, Tab
         }
     }
     counts
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::{clean_text, search_query};
+
+    #[test]
+    fn invisible_and_control_characters_are_dropped() {
+        assert_eq!(clean_text("pho\u{200B}to\u{200E}.jpg\r"), "photo.jpg");
+        assert_eq!(clean_text("\u{FEFF}cat\u{00AD}s"), "cats");
+        assert_eq!(clean_text("two words"), "two words");
+    }
+
+    #[test]
+    fn a_copied_file_searches_for_its_name() {
+        assert_eq!(search_query("/home/me/Pictures/photo 1.jpg\r"), "photo 1.jpg");
+        assert_eq!(search_query("file:///home/me/Pictures/photo%201.jpg"), "photo 1.jpg");
+        assert_eq!(search_query("~/Pictures/photo.jpg"), "photo.jpg");
+        assert_eq!(search_query(r"C:\Users\me\photo.jpg"), "photo.jpg");
+        assert_eq!(search_query("file:///home/me/caf%C3%A9.png"), "café.png");
+    }
+
+    #[test]
+    fn ordinary_searches_are_left_alone() {
+        assert_eq!(search_query("photo"), "photo");
+        assert_eq!(search_query(" photo "), " photo ");
+        assert_eq!(search_query("100%"), "100%");
+    }
 }

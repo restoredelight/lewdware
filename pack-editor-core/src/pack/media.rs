@@ -416,11 +416,13 @@ impl MediaPack {
         let Some(id) = existing else {
             return Ok(None);
         };
+        // Just this file: reading every file to find it made each duplicate in a bulk import
+        // cost a read of the whole pack, under the pack's lock.
         Ok(self
-            .get_files()
+            .db_execute(move |conn| read_files(&conn, Some(&[id])))
             .await?
             .into_iter()
-            .find(|file| file.id == id))
+            .next())
     }
 
     pub async fn check_hash(&self, hash: &blake3::Hash) -> Result<bool> {

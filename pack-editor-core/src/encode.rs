@@ -277,7 +277,7 @@ pub async fn process_files(
             events(ImportEvent::FileDone);
         }
     });
-    tokio::pin!(process_all);
+    let mut process_all = Box::pin(process_all);
 
     // Dropping the stream is the cancellation: queued paths are never visited, in-flight
     // files stop at their next await, and encodes already running on the rayon pool finish
@@ -286,6 +286,9 @@ pub async fn process_files(
         _ = &mut process_all => {}
         _ = wait_cancelled(&mut cancel) => {}
     }
+    // Dropped now, not at the end of the function: an in-flight file can be holding the pack
+    // lock, which finishing the history entry below waits for.
+    drop(process_all);
 
     {
         let lock = pack_state.lock().await;

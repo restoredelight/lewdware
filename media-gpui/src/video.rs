@@ -69,6 +69,9 @@ pub struct VideoDecoder {
     clock_origin: Option<Instant>,
     paused_at: Option<Instant>,
     pending: Option<VideoFrame>,
+    /// ADDED: the decoder pass playing. The decoder always runs on into the next pass; whether
+    /// playback follows it is decided at the seam (`at_seam`), from the loop flag as it is then.
+    pass: u64,
     current_frame_expiry: Option<Instant>,
     audio_clock: Option<(Duration, Instant)>,
     audio_stalled: bool,
@@ -105,7 +108,7 @@ impl VideoDecoder {
         let stats = Arc::new(DecodeStats::default());
         let stop = Arc::new(AtomicBool::new(false));
         let VideoStream { rx, meta } =
-            spawn_video_stream(&opts, loop_video.clone(), stats.clone(), stop.clone())?;
+            spawn_video_stream(&opts, stats.clone(), stop.clone())?;
 
         let audio_player = match audio_out {
             Some(out) => match AudioPlayer::new(
@@ -131,6 +134,7 @@ impl VideoDecoder {
             clock_origin: None,
             paused_at: None,
             pending: None,
+            pass: 0,
             current_frame_expiry: None,
             audio_clock: None,
             audio_stalled: false,
@@ -195,6 +199,9 @@ impl VideoDecoder {
                 RecvFrame::Finished => return self.finish_once_the_last_frame_is_done(),
             },
         };
+        let Some(frame) = self.at_seam(frame) else {
+            return self.finish_once_the_last_frame_is_done();
+        };
 
         let now = Instant::now();
         let origin = *self
@@ -215,6 +222,20 @@ impl VideoDecoder {
         self.current_frame_expiry = Some(deadline.max(now) + frame.duration);
 
         NextFrame::Ready(frame)
+    }
+
+    /// ADDED: lets `frame` through unless it starts a pass that playback shouldn't follow into
+    /// (loop off); then it's held back and the video finishes. Held, so turning loop on before
+    /// the last frame is done still carries on.
+    fn at_seam(&mut self, frame: VideoFrame) -> Option<VideoFrame> {
+        if frame.pass != self.pass {
+            if !self.loop_video.load(Ordering::Relaxed) {
+                self.pending = Some(frame);
+                return None;
+            }
+            self.pass = frame.pass;
+        }
+        Some(frame)
     }
 
     fn finish_once_the_last_frame_is_done(&self) -> NextFrame {
@@ -268,6 +289,17 @@ impl VideoDecoder {
 
         self.audio_clock = None;
 
+        // ADDED: a frame held back at the seam (see `at_seam`).
+        if let Some(frame) = self.pending.take() {
+            return match self.at_seam(frame) {
+                Some(frame) => {
+                    self.pending = Some(frame);
+                    self.next_frame_clock_master()
+                }
+                None => self.finish_once_the_last_frame_is_done(),
+            };
+        }
+
         let frame = loop {
             match self.rx.try_recv() {
                 Ok(frame) => {
@@ -278,7 +310,10 @@ impl VideoDecoder {
                             continue;
                         }
                     }
-                    break frame;
+                    match self.at_seam(frame) {
+                        Some(frame) => break frame,
+                        None => return self.finish_once_the_last_frame_is_done(),
+                    }
                 }
                 Err(TryRecvError::Empty) => {
                     self.lag_count += 1;
@@ -376,7 +411,6 @@ struct VideoStream {
 
 fn spawn_video_stream(
     opts: &Options,
-    loop_video: Arc<AtomicBool>,
     stats: Arc<DecodeStats>,
     stop: Arc<AtomicBool>,
 ) -> Result<VideoStream> {
@@ -398,7 +432,6 @@ fn spawn_video_stream(
             if let Err(err) = decode_video(
                 source,
                 tx,
-                loop_video,
                 packed_alpha,
                 meta_tx,
                 start,
@@ -464,7 +497,6 @@ fn dst_size(native_w: u32, native_h: u32, target: u64) -> (u32, u32) {
 fn decode_video(
     source: MediaSource,
     tx: SyncSender<VideoFrame>,
-    loop_video: Arc<AtomicBool>,
     packed_alpha: bool,
     meta_tx: SyncSender<VideoMetadata>,
     start: Duration,
@@ -533,6 +565,8 @@ fn decode_video(
     let mut current_loop_offset = Duration::ZERO;
     let mut pass = 0;
     let mut sequence = 0;
+    // ADDED: frames this pass decoded, so a pass that decodes none ends the stream.
+    let mut frames_in_pass = 0u64;
     let mut last_pts_duration = Duration::ZERO;
     let mut last_frame_duration = frame_duration;
     // Frames before the seek target are decoded but not converted or sent. Half a frame of slack
@@ -605,6 +639,7 @@ fn decode_video(
                     if !got {
                         break;
                     }
+                    frames_in_pass += 1;
                     let (ok, pts, duration) =
                         emit(&mut decoded, current_loop_offset, pass, &mut skip_before);
                     last_pts_duration = pts;
@@ -619,6 +654,7 @@ fn decode_video(
 
         decoder.send_eof()?;
         while decoder.receive_frame(&mut decoded).is_ok() {
+            frames_in_pass += 1;
             let (ok, pts, duration) =
                 emit(&mut decoded, current_loop_offset, pass, &mut skip_before);
             last_pts_duration = pts;
@@ -628,9 +664,12 @@ fn decode_video(
             }
         }
 
-        if !loop_video.load(Ordering::Relaxed) {
+        // CHANGED: always on to the next pass; `VideoDecoder::at_seam` decides as the seam plays
+        // whether it's shown. A pass that produced nothing would only spin.
+        if frames_in_pass == 0 {
             return Ok(());
         }
+        frames_in_pass = 0;
 
         ictx.seek(0, ..0)?;
         decoder.flush();

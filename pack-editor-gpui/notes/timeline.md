@@ -90,22 +90,19 @@ StageTabs, StageEditor, TransitionEditor and EventScheduleEditor, apart from wha
   - The stage duration card, with "Then change to Stage 2" and "Immediately".
 - **Not exercised in the UI:**
   - Dragging to reorder (I didn't try xdotool drags).
-  - The membership component (nothing mounts it yet).
   - The membership confirmation dialog (the core tests cover it).
 
 ## Not done
 
-- **Importing a file from disk straight into a stage slot.** Tauri's "Choose file..." goes through
-  `encode::process_file_into_slot`, which needs the import pipeline (Shell and lifecycle track). Slots
-  can be filled from files already in the pack.
-- **No thumbnails** in slots or the picker, only the file name and kind.
+_Written at the merge (2026-11-09). Items done since have been removed; the README's "Known caveats" is the current list._
+
 - **The entry notification is a single-line field.** Tauri used a two-row textarea.
 - **Restricting a stage's content runs on the UI thread.** It tags every file in the pack
   synchronously, about 100 ms at 10,000 files. `design/editor-model.md` says bulk actions belong on
   the background executor, but `Editor` has no way to do that yet.
 - **No "reveal stage wallpaper" deep link** (Tauri's `experienceTargetStageId`).
 
-## Mounting the membership component
+## The membership component
 
 ```rust
 use crate::views::timeline::{stage_membership, StageMembership};
@@ -123,8 +120,7 @@ membership.update(cx, |m, cx| m.set_media(new_id, cx));
 - It subscribes to the editor itself, on the Timeline, Tags and Media scopes.
 - It shows "N of M" and one chip per stage. Clicking a chip toggles membership as one undo entry.
 - A join that would remove author tags shows the "Add anyway" dialog first.
-- Until it's mounted, `membership.rs` has `#![allow(dead_code)]` and the re-export in `mod.rs` has
-  `#[allow(unused_imports)]`. Drop both when it's mounted.
+- It's mounted in the library inspector and the viewer.
 
 ## Changes outside owned files
 

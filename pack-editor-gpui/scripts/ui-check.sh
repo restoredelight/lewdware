@@ -9,9 +9,12 @@
 #   shot NAME           screenshot to <out-dir>/NAME.png
 #   click X Y           left-click at window coordinates
 #   move X Y            move the pointer (for hover states)
+#   drag X1 Y1 X2 Y2    press at X1 Y1, move to X2 Y2 in steps, release
 #   key COMBO           xdotool key combo, e.g. ctrl+z, ctrl+s, Escape
 #   scroll X Y N        scroll N wheel notches at X Y (negative scrolls up)
 #   type TEXT           type literal text
+#   clip TEXT           put TEXT on the private display's clipboard (printf %b escapes, so
+#                       \r and \u200b work), for a following `key ctrl+v`
 #   wait SECONDS        sleep
 #   recents             print the recent-packs list as it is on disk now
 #   metrics             print RSS, GPU memory and active preview/decode threads
@@ -38,7 +41,8 @@
 # With --no-build it uses whatever binary is in the target directory, which another worktree
 # sharing CARGO_TARGET_DIR may have replaced; prefer building.
 #
-# Needs: Xvfb, xdotool, ImageMagick (`import`), mesa-vulkan-drivers, util-linux `flock`.
+# Needs: Xvfb, xdotool, ImageMagick (`import`), mesa-vulkan-drivers, util-linux `flock`, and
+# xclip for `clip`.
 
 set -euo pipefail
 
@@ -168,6 +172,13 @@ while [[ $# -gt 0 ]]; do
             echo "shot $out/$1.png"; shift ;;
         click) xdotool mousemove "$1" "$2" click 1; sleep 0.5; shift 2 ;;
         move) xdotool mousemove "$1" "$2"; sleep 0.5; shift 2 ;;
+        drag)
+            xdotool mousemove "$1" "$2" mousedown 1
+            for i in 1 2 3 4 5 6 7 8; do
+                xdotool mousemove $(( $1 + ($3 - $1) * i / 8 )) $(( $2 + ($4 - $2) * i / 8 ))
+                sleep 0.05
+            done
+            xdotool mouseup 1; sleep 0.5; shift 4 ;;
         key) xdotool key "$1"; sleep 0.5; shift ;;
         scroll)
             button=5 notches=$3
@@ -176,6 +187,7 @@ while [[ $# -gt 0 ]]; do
             for _ in $(seq "$notches"); do xdotool click "$button"; done
             sleep 0.5; shift 3 ;;
         type) xdotool type --delay 30 "$1"; sleep 0.5; shift ;;
+        clip) printf '%b' "$1" | xclip -selection clipboard; sleep 0.2; shift ;;
         wait) sleep "$1"; shift ;;
         cursor)
             python3 -I -c 'from Xlib import display

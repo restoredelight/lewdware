@@ -11,9 +11,8 @@ use crate::store::{FeedbackKind, Store};
 use crate::theme::{self, c};
 use crate::ui::{self, Button, SelectOption, Size};
 
-/// Label, description, and how to write and read the channel in `Volume`.
+/// Label and how to write and read the channel in `Volume`.
 type VolumeSpec = (
-    &'static str,
     &'static str,
     fn(&mut Volume) -> &mut f32,
     fn(&Volume) -> f32,
@@ -21,7 +20,6 @@ type VolumeSpec = (
 
 struct VolumeSlider {
     label: &'static str,
-    description: &'static str,
     read: fn(&Volume) -> f32,
     state: Entity<SliderState>,
 }
@@ -50,24 +48,14 @@ impl AudioPage {
             .unwrap_or_default();
 
         let specs: [VolumeSpec; 2] = [
-            (
-                "Video volume",
-                "Master volume for a video popup's embedded audio track.",
-                |v| &mut v.video,
-                |v| v.video,
-            ),
-            (
-                "Audio volume",
-                "Master volume for standalone audio the pack or mode plays.",
-                |v| &mut v.audio,
-                |v| v.audio,
-            ),
+            ("Video volume", |v| &mut v.video, |v| v.video),
+            ("Audio volume", |v| &mut v.audio, |v| v.audio),
         ];
 
         let mut subscriptions = Vec::new();
         let sliders = specs
             .into_iter()
-            .map(|(label, description, channel, read)| {
+            .map(|(label, channel, read)| {
                 let state = cx.new(|_| {
                     SliderState::new()
                         .min(0.)
@@ -90,12 +78,7 @@ impl AudioPage {
                         }
                     });
                 }));
-                VolumeSlider {
-                    label,
-                    description,
-                    read,
-                    state,
-                }
+                VolumeSlider { label, read, state }
             })
             .collect();
 
@@ -314,7 +297,6 @@ impl AudioPage {
                                     .font_weight(gpui_kit::FontWeight::SEMIBOLD),
                             ),
                     )
-                    .child(ui::hint(slider.description))
                     .child(Slider::new(&slider.state).accessibility_label(slider.label))
             }))
             .into_any_element()
@@ -323,13 +305,12 @@ impl AudioPage {
 
 impl Render for AudioPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let section = |title: &'static str, hint: &'static str, body: AnyElement| {
+        let section = |title: &'static str, body: AnyElement| {
             div()
                 .flex()
                 .flex_col()
                 .gap_2()
                 .child(ui::section_title(title))
-                .child(ui::hint(hint))
                 .child(body)
                 .into_any_element()
         };
@@ -338,19 +319,8 @@ impl Render for AudioPage {
         ui::page(
             "audio",
             "Audio",
-            "Choose where sound comes out, and how loudly media plays.",
-            [
-                section(
-                    "Output device",
-                    "Which output popups and sounds play through. Applies to sounds started from now on; a session already running keeps the device it opened with.",
-                    output,
-                ),
-                section(
-                    "Volume",
-                    "Master volume, applied on top of whatever volume the pack or mode requests for a track.",
-                    volume,
-                ),
-            ],
+            "",
+            [section("Output device", output), section("Volume", volume)],
         )
     }
 }

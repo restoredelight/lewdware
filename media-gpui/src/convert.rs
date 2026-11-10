@@ -28,6 +28,14 @@ pub struct Converter {
 // The contexts are only ever used from the decode thread that owns the Converter.
 unsafe impl Send for Converter {}
 
+/// Bytes past the last row that swscale may write into.
+const SLACK: usize = 64;
+
+/// A row length rounded up to 64 bytes, the widest SIMD store swscale makes.
+fn padded(row: usize) -> usize {
+    row.div_ceil(64) * 64
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Key {
     src_format: i32,
@@ -98,8 +106,13 @@ impl Converter {
             self.rebuild(key)?;
         }
 
-        let mut out = vec![0u8; dst_w as usize * dst_h as usize * 4];
-        let dst_stride = [dst_w as i32 * 4, 0, 0, 0];
+        // swscale's SIMD paths write past the end of a row (8 bytes over a 333px BGRA row, seen
+        // under valgrind), so a tight buffer has its last row run off the allocation and corrupt
+        // the heap. Give it padded rows and slack at the end, then pack the rows tight.
+        let tight = dst_w as usize * 4;
+        let stride = padded(tight);
+        let mut out = vec![0u8; stride * dst_h as usize + SLACK];
+        let dst_stride = [stride as i32, 0, 0, 0];
         let dst_data = [
             out.as_mut_ptr(),
             ptr::null_mut(),
@@ -139,14 +152,15 @@ impl Converter {
                             alpha_top.add(row * y_stride),
                             dst_w as usize,
                         );
-                        let dst = &mut out[row * dst_w as usize * 4..][..dst_w as usize * 4];
+                        let dst = &mut out[row * stride..][..tight];
                         for (px, &a) in dst.chunks_exact_mut(4).zip(src) {
                             px[3] = a;
                         }
                     }
                 } else {
+                    let a_stride = padded(dst_w as usize);
                     self.alpha_scratch
-                        .resize(dst_w as usize * dst_h as usize, 0);
+                        .resize(a_stride * dst_h as usize + SLACK, 0);
                     let a_src = [
                         alpha_top as *const u8,
                         ptr::null(),
@@ -160,7 +174,7 @@ impl Converter {
                         ptr::null_mut(),
                         ptr::null_mut(),
                     ];
-                    let a_dst_stride = [dst_w as i32, 0, 0, 0];
+                    let a_dst_stride = [a_stride as i32, 0, 0, 0];
                     ffi::sws_scale(
                         self.alpha,
                         a_src.as_ptr(),
@@ -170,13 +184,23 @@ impl Converter {
                         a_dst.as_ptr(),
                         a_dst_stride.as_ptr(),
                     );
-                    for (px, &a) in out.chunks_exact_mut(4).zip(&self.alpha_scratch) {
-                        px[3] = a;
+                    for row in 0..dst_h as usize {
+                        let alpha = &self.alpha_scratch[row * a_stride..][..dst_w as usize];
+                        let dst = &mut out[row * stride..][..tight];
+                        for (px, &a) in dst.chunks_exact_mut(4).zip(alpha) {
+                            px[3] = a;
+                        }
                     }
                 }
             }
         }
 
+        if stride != tight {
+            for row in 1..dst_h as usize {
+                out.copy_within(row * stride..row * stride + tight, row * tight);
+            }
+        }
+        out.truncate(tight * dst_h as usize);
         Ok(out)
     }
 
@@ -322,6 +346,23 @@ mod tests {
                 let pixels = converter.convert(&frame, true, size, size).unwrap();
                 assert_eq!(pixels.len(), (size * size * 4) as usize);
                 assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == alpha));
+            }
+        }
+    }
+
+    /// Odd and unaligned sizes, opaque and packed-alpha, same size and scaled. swscale's SIMD
+    /// writes run past a row's end; this is the shape that corrupted the heap (run it under
+    /// valgrind to see the writes, see `convert`).
+    #[test]
+    fn awkward_sizes_stay_inside_the_output() {
+        let mut converter = Converter::new();
+        for (w, h) in [(333, 250), (17, 9), (641, 361), (1, 1), (999, 563)] {
+            for packed in [false, true] {
+                let frame = yuv_frame(w, if packed { h * 2 } else { h }, 128, 128, 128);
+                for (dw, dh) in [(w, h), ((w / 2).max(1), (h / 2).max(1)), (w + 3, h + 1)] {
+                    let pixels = converter.convert(&frame, packed, dw, dh).unwrap();
+                    assert_eq!(pixels.len(), (dw * dh * 4) as usize);
+                }
             }
         }
     }

@@ -17,7 +17,7 @@ mod browser;
 mod inspector;
 pub mod tags;
 mod thumbs;
-mod viewer;
+pub(crate) mod viewer;
 
 use std::collections::HashMap;
 use std::future::Future;

@@ -137,6 +137,9 @@ pub fn show_view(view: View, _window: &mut Window, cx: &mut App) {
 /// The import window's own state; what it shows comes from the editor.
 #[derive(Default)]
 struct ImportWindowState {
+    /// Dragged to here (its top left corner, in the shell); `None` is the bottom right.
+    position: Option<gpui_kit::Point<gpui_kit::Pixels>>,
+    drag: imports::MoveImportWindow,
     minimized: bool,
     errors_open: bool,
     stopping: bool,
@@ -155,6 +158,7 @@ pub struct Shell {
     /// isn't focused (see `render`), and commits on Enter, blur, or `CommitPending`.
     title: Entity<InputState>,
     _title_events: Subscription,
+    _title_focus: [Subscription; 2],
     _changes: [Subscription; 2],
 }
 
@@ -164,6 +168,7 @@ impl Shell {
         cx.set_global(CurrentShell(cx.weak_entity()));
         let name = editor.read(cx).pack().name();
         let title = cx.new(|cx| InputState::new(window, cx).default_value(name));
+        let _title_focus = ui::track_focus_of(&title, window, cx);
         let _title_events = cx.subscribe(&title, |this, _, event: &InputEvent, cx| {
             match event {
                 InputEvent::PressEnter { .. } | InputEvent::Blur => this.commit_title(cx),
@@ -181,6 +186,7 @@ impl Shell {
             warnings_focused: false,
             title,
             _title_events,
+            _title_focus,
             _changes,
         }
     }
@@ -279,7 +285,9 @@ impl Shell {
         // A routine state is a bare muted dot, with the detail in its tooltip; only saving
         // progress is spelled out (`shared-ui/DESIGN.md`, "Routine states are not warnings").
         let progress: Option<SharedString> = saving.map(|progress| {
-            if progress.total > 0 {
+            if progress.waiting_for_import {
+                "Saving once the import finishes".into()
+            } else if progress.total > 0 {
                 format!("Saving {} of {}", progress.saved, progress.total).into()
             } else {
                 "Saving...".into()
@@ -450,14 +458,31 @@ impl Shell {
                         .disabled(!history.can_redo || busy),
                     ),
             )
-            .child(
-                Button::new("save", "Save")
-                    .variant(Variant::Primary)
+            .child({
+                // The button says where things stand, not just the dot beside the title:
+                // red "Save" with work to save, "Saving" during, a quiet "Saved" after.
+                let saved = !busy && !dirty && !untitled;
+                let label = if busy {
+                    "Saving"
+                } else if saved {
+                    "Saved"
+                } else {
+                    "Save"
+                };
+                let button = Button::new("save", label)
+                    .variant(if saved {
+                        Variant::Secondary
+                    } else {
+                        Variant::Primary
+                    })
                     .size(Size::Compact)
+                    .full_width()
                     .loading(busy)
-                    .disabled(!dirty && !untitled)
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(Save), cx)),
-            )
+                    .disabled(saved)
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(Save), cx));
+                // Wide enough for the longest label, so the toolbar doesn't shift between them.
+                div().flex_none().w(px(72.)).child(button)
+            })
             .child(more)
     }
 
@@ -487,17 +512,20 @@ impl Shell {
                     .on_click(move |_, _, cx| shell.update(cx, |shell, cx| shell.show(view, cx)))
                 }))
         });
-        div()
-            .flex_none()
-            .w(px(200.))
-            .h_full()
-            .px_2()
-            .flex()
-            .flex_col()
-            .border_r_1()
-            .border_color(c(theme::BORDER))
-            .bg(c(theme::SURFACE))
-            .children(groups)
+        ui::resizable_sidebar(
+            "nav-sidebar",
+            ui::Side::Left,
+            px(200.),
+            (px(160.), px(360.)),
+            div()
+                .size_full()
+                .px_2()
+                .flex()
+                .flex_col()
+                .bg(c(theme::SURFACE))
+                .children(groups),
+            cx,
+        )
     }
 
     fn import_window(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -516,6 +544,8 @@ impl Shell {
         Some(
             ImportWindow {
                 progress,
+                position: self.import_window.position,
+                drag: self.import_window.drag.clone(),
                 preparing,
                 minimized: self.import_window.minimized,
                 errors_open: self.import_window.errors_open,
@@ -634,6 +664,19 @@ impl Render for Shell {
                         .child(imports::drop_overlay()),
                 )
             })
+            .on_drag_move::<imports::MoveImportWindow>(cx.listener(
+                |this, event: &gpui_kit::DragMoveEvent<imports::MoveImportWindow>, _, cx| {
+                    let grab = event.drag(cx).0.get();
+                    let bounds = event.bounds;
+                    // The titlebar sits inside the window's 1px border.
+                    let corner = event.event.position - grab - bounds.origin - gpui_kit::point(px(1.), px(1.));
+                    // Keep the titlebar reachable.
+                    let x = corner.x.clamp(px(0.), (bounds.size.width - px(120.)).max(px(0.)));
+                    let y = corner.y.clamp(px(0.), (bounds.size.height - px(32.)).max(px(0.)));
+                    this.import_window.position = Some(gpui_kit::point(x, y));
+                    cx.notify();
+                },
+            ))
             .children(import_window)
             .children(warnings)
     }
