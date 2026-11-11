@@ -97,17 +97,21 @@ impl VocabularyView {
                     this.reload(cx);
                 }
             }),
-            cx.subscribe_in(&search, window, |_, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    clean_search_field(
-                        input,
-                        pack_editor_core::session::library::clean_text,
-                        window,
-                        cx,
-                    );
-                    cx.notify();
-                }
-            }),
+            cx.subscribe_in(
+                &search,
+                window,
+                |_, input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        clean_search_field(
+                            input,
+                            pack_editor_core::session::library::clean_text,
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                },
+            ),
         ];
         subscriptions.extend(ui::track_focus_of(&search, window, cx));
         let mut view = Self {

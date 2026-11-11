@@ -70,13 +70,10 @@ x11-dl = "2"
 windows = { version = "0.62", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi_Common"] }
 
 [features]
+# Link FFmpeg statically. Release builds use this with the LGPL-only FFmpeg that
+# deploy/build_ffmpeg.sh builds (Linux, macOS) or vcpkg's static triplet (Windows), found through
+# pkg-config or vcpkg, so their codec libraries are linked too. See lewdware/THIRD_PARTY_LICENSES.md.
 static-ffmpeg = ["ffmpeg-next/static"]
-# Vendors and statically links FFmpeg from pristine upstream source, without
-# --enable-gpl/--enable-nonfree (i.e. no libx264/libx265/etc). This keeps the
-# resulting binary under FFmpeg's default LGPL v2.1+ license instead of GPL,
-# which system-installed FFmpeg (Ubuntu apt, Homebrew) is normally built with.
-# Used for official release builds on Linux/macOS - see .github/workflows/build.yml.
-build-ffmpeg = ["ffmpeg-next/build", "ffmpeg-next/build-lib-dav1d"]
 
 [dev-dependencies]
 zstd = "0.13.3"

@@ -18,3 +18,4 @@ rebuilds/restarts on every file change. `Shift+Escape` (the default stop shortcu
 | --- | --- |
 | `theme-gallery` | Every named window theme, laid out in a grid, so the catalogue can be compared side by side. See [`design/window-themes.md`](../design/window-themes.md). |
 | `audio-stress` | One track played many times at once, to measure what limits simultaneous audio. |
+| `video-stress` | A fixed number of looping, muted video popups, to measure the steady-state cost of video playback (e.g. one codec against another). |

@@ -136,7 +136,9 @@ impl MediaBrowser {
                         let typed = input.read(cx).value().to_string();
                         let query = pack_editor_core::session::library::search_query(&typed);
                         if query != typed {
-                            input.update(cx, |input, cx| input.replace_all(query.clone(), window, cx));
+                            input.update(cx, |input, cx| {
+                                input.replace_all(query.clone(), window, cx)
+                            });
                         }
                         this.filter.query = query;
                         this.refresh(window, cx);

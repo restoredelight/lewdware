@@ -2,10 +2,7 @@
 //! media slots.
 
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    div, px, AnyElement, App, Context, Focusable, FontWeight, SharedString,
-    Window,
-};
+use gpui_kit::{div, px, AnyElement, App, Context, Focusable, FontWeight, SharedString, Window};
 use shared::behaviour::MediaSlot;
 
 use super::fields::Spec;
@@ -13,7 +10,6 @@ use super::TimelineView;
 use crate::theme::{self, c};
 use crate::ui;
 use crate::views::media_slot::{slot_key, MediaSlotView, SlotEvent};
-
 
 /// A toggle's handler with access to the view, as `cx.listener` gives a click's.
 pub(super) fn listen_bool<V: 'static>(
@@ -143,7 +139,9 @@ impl TimelineView {
                 entity
             }
         };
-        entity.update(cx, |view, cx| view.set(current, spec.empty_note.clone(), cx));
+        entity.update(cx, |view, cx| {
+            view.set(current, spec.empty_note.clone(), cx)
+        });
 
         div()
             .flex()

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Lewdware Pack Editor
+Comment=Create and edit Lewdware packs
+Exec=lewdware-pack-editor
+Icon=com.lewdware.pack-editor
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=com.lewdware.pack-editor

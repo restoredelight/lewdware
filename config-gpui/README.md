@@ -1,15 +1,13 @@
 # config-gpui
 
-The config app (`config/`) rebuilt on [gpui](https://gpui.rs) via
-[GPUI Kit](https://gpui-kit.com). It's a **pilot**: every page of `config/` is ported, and it runs
-beside the Tauri + Svelte app until it replaces it. How it goes decides whether `pack-editor/`
-follows.
+The config app, built on [gpui](https://gpui.rs) via [GPUI Kit](https://gpui-kit.com). It
+replaced the Tauri + Svelte app (`config/`, deleted in November 2026). The package is
+`lewdware-config` and the binary `lewdware`: the tray's "Open Lewdware" and
+`shared::binaries::find_config_binary` look for those names.
 
 ```sh
-cargo run -p config-gpui
+cargo run -p lewdware-config
 ```
-
-Always build it with `-p config-gpui`; see the zbus caveat below for why.
 
 ## Layout
 
@@ -45,16 +43,17 @@ What changed on the way, beyond the rewrite itself:
 
 ## Replacing `config/`
 
-Not done yet; what it takes:
-
-1. Rename the package to `lewdware-config` and its binary to `lewdware`. The tray's "Open
-   Lewdware" and `shared::binaries::find_config_binary` look for those names.
-2. Point `deploy/` (the `.deb`/`.rpm`, Flatpak, macOS and Windows installers) at the new binary.
-   They currently build `config/` with `pnpm tauri build`. The desktop file and window icon come
-   from the installers now; there is no Tauri bundler.
-3. Add `libxkbcommon-x11-dev` to the Linux CI and build images.
-4. Delete `config/`, and the parts of `shared-ui/` only it used.
+1. ~~Rename the package to `lewdware-config` and its binary to `lewdware`.~~ Done.
+2. ~~Point `deploy/` at the new binary.~~ Done. Without a bundler, the installers supply what
+   Tauri used to: `deploy/linux/com.lewdware.config.desktop` (named after the window's app id,
+   which is how Linux desktops find its icon) and the icons from `assets/icons/`;
+   `deploy/macos/bundle.sh` writes `Lewdware.app`'s Info.plist (bundle id `com.lewdware`, as
+   before, so macOS permission grants carry over); `build.rs` embeds the Windows icon.
+3. ~~Add `libxkbcommon-x11-dev` to the Linux CI.~~ Done.
+4. ~~Delete `config/`, and the parts of `shared-ui/` only it used.~~ Done.
 5. Work through the caveats below.
+6. Build each installer once and install it: CI has never run the new scripts. Checked so far
+   on Linux only (see "Untested").
 
 ## Checking UI changes
 
@@ -88,16 +87,15 @@ Things that are knowingly wrong or missing, to fix before this replaces `config/
 
 ### Build
 
-- **zbus feature unification crashes the app.** If anything in the same `cargo` invocation
-  enables `zbus`'s `tokio` feature (directly, or through rfd's, ashpd's or ksni's `tokio`
-  feature), it switches zbus to tokio for the whole binary. gpui's own portal and
-  accessibility code then panics at startup with "there is no reactor running". This crate uses
-  rfd's `async-std` backend to stay clear of it, and the supervisor now uses zbus's and ksni's
-  async-io backends. The Tauri apps still enable it through `tauri-plugin-dialog`, so a
-  workspace-wide `cargo build` unifies the feature in until they are deleted. Build with
-  `-p config-gpui`.
+- **Never enable zbus's `tokio` feature.** If anything in the same `cargo` invocation enables
+  it (directly, or through rfd's, ashpd's or ksni's `tokio` feature), Cargo switches zbus to
+  tokio for the whole binary, and gpui's own portal and accessibility code then panics at
+  startup with "there is no reactor running". This crate uses rfd's `async-std` backend, and the
+  supervisor zbus's and ksni's async-io backends. Since the Tauri apps went, nothing in the
+  workspace enables it, so a workspace-wide `cargo build` is fine; check
+  `cargo tree --workspace -e features -i zbus` when adding a dependency that talks D-Bus.
 - **Linux needs `libxkbcommon-x11` dev headers** (`libxkbcommon-x11-devel` on Fedora,
-  `libxkbcommon-x11-dev` on Ubuntu). CI doesn't install them yet.
+  `libxkbcommon-x11-dev` on Ubuntu).
 
 ### Behaviour
 
@@ -133,8 +131,10 @@ Things that are knowingly wrong or missing, to fix before this replaces `config/
 - **Numeric and time fields commit on Enter or leaving the field**, not on every keystroke as
   the webview's did. Scheduling's time fields are plain text (`HH:MM`) rather than a native time
   picker; invalid input reverts.
-- **No window icon set.** Tauri set one at runtime; gpui doesn't offer that on Linux, where the
-  icon comes from the desktop file matching the `lewdware-config` app id.
+- **The window icon comes from the installers.** gpui can't set one at runtime on Linux; the
+  desktop file named after the app id (`com.lewdware.config`) supplies it, so a `cargo run`
+  build shows a generic icon. On Windows it's the exe's embedded icon (`build.rs`), on macOS
+  the bundle's.
 
 ### Look and feel
 
@@ -151,9 +151,6 @@ Things that are knowingly wrong or missing, to fix before this replaces `config/
   imitate Win95's pressed face (`bevel::button`); here a held button only changes colour.
 - **No echo frame on the task status toast or menus.** They have the hard offset shadow; only
   the dialog has the spawned-window echo from `DESIGN.md`.
-- **Enum descriptions aren't shown.** The webview's select showed an enum member's
-  `description` under its label. `ui::SelectOption::description` supports it now, but
-  `pages/pack_mode.rs` doesn't pass the member's description through yet.
 - **A nav item can keep its hover colour** after the pointer jumps straight to another item.
   Seen only under xdotool, which moves the pointer instantly; probably not reachable by hand.
 
@@ -176,7 +173,11 @@ Exercised with `ui-check.sh`, each change checked against the saved config:
 - **Shell:** navigation, Launch's failure path, the update banner (forced on) and its dismiss,
   single-instance handoff.
 
-Not yet: a successful Launch/Stop and enabling scheduling for real (both need a supervisor,
-which the test harness deliberately can't reach), the file pickers (pack, mode, wallpaper image,
-per-rule pack), Test sound, a live update check, and anything on a real Wayland session or on
-macOS/Windows.
+Native checks now cover successful Launch/Stop, real scheduling activation and cleanup, all four
+file pickers, Test sound, and the live update backend. The gpui app was also built and exercised
+on Windows, including its embedded icon. See the [2026-11-11 test report](../deploy/vm/reports/gpui-flows-2026-11-11.md)
+for platform/build scope, evidence, and the initial Windows probe timeout that passed on retest.
+
+Not yet: the gpui app on macOS or a real Wayland session. None of the new installers has been
+built on macOS or Windows (including the hand-written `.app`), nor has the tray's "Open Lewdware"
+been tried against an installed build. The macOS Input Monitoring check remains a stub.

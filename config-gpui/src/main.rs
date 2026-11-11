@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
-//! The config app, rebuilt on gpui. A pilot: it runs beside `config/` until it can replace it.
+// No console window behind the app on Windows. Debug builds keep it, for logs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+//! The config app: configure the engine, pick a pack and mode, launch and stop sessions.
 
 mod backend;
 mod keys;
@@ -12,6 +14,8 @@ mod theme;
 use shared_gpui::{runtime, ui};
 
 use gpui_kit::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
+
+pub const APP_ID: &str = "com.lewdware.config";
 
 fn main() {
     let _log_guard = shared::logging::init("config").expect("Couldn't start logs");
@@ -40,7 +44,9 @@ fn main() {
                     title: Some("Lewdware".into()),
                     ..Default::default()
                 }),
-                app_id: Some("lewdware-config".into()),
+                // The desktop file's name (`deploy/linux/`), which is where Wayland and X11 desktops
+                // get the window icon from.
+                app_id: Some(APP_ID.into()),
                 ..Default::default()
             };
             let (window, _) = gpui_kit::open_window(options, cx, |_, cx| cx.new(shell::Shell::new))

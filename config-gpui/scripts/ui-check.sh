@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive config-gpui on a private, headless X display and screenshot it. For checking UI changes by
+# Drive the config app (config-gpui/) on a private, headless X display and screenshot it. For checking UI changes by
 # eye, and for exercising interactions (clicks, keys, drags) without touching the real desktop.
 #
 #   config-gpui/scripts/ui-check.sh [options] <out-dir> [step...]
@@ -38,7 +38,7 @@
 # Options:
 #   --fresh       start from an empty config rather than a copy of the real one
 #   --config FILE start from FILE as config.json rather than a copy of the real one
-#   --no-build    don't run `cargo build -p config-gpui` first
+#   --no-build    don't run `cargo build -p lewdware-config` first
 #   --settle N    seconds to wait after launch before the first step (default 4)
 #   --keep        keep the temporary directory and print its path
 #
@@ -65,7 +65,7 @@ mkdir -p "$out"
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo"
 if [[ $build == 1 ]]; then
-    cargo build -q -p config-gpui
+    cargo build -q -p lewdware-config
 fi
 
 lavapipe=$(ls /usr/share/vulkan/icd.d/lvp_icd.*"$(uname -m)".json 2>/dev/null | head -1 || true)
@@ -86,11 +86,11 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$tmp"/{bin,config,data,state,cache,runtime}
-for name in config-gpui lewdware-engine; do
+for name in lewdware lewdware-engine; do
     [[ -e $repo/target/debug/$name ]] || continue
     ln "$repo/target/debug/$name" "$tmp/bin/$name" 2>/dev/null || cp "$repo/target/debug/$name" "$tmp/bin/$name"
 done
-binary=$tmp/bin/config-gpui
+binary=$tmp/bin/lewdware
 chmod 700 "$tmp/runtime"
 real_config=${XDG_CONFIG_HOME:-$HOME/.config}/lewdware
 if [[ -n $seed ]]; then
@@ -118,7 +118,7 @@ unshare --map-current-user --net env -u WAYLAND_DISPLAY \
     "$binary" >"$out/app.log" 2>&1 &
 app_pid=$!
 sleep "$settle"
-kill -0 "$app_pid" 2>/dev/null || { echo "config-gpui exited early; see $out/app.log" >&2; exit 1; }
+kill -0 "$app_pid" 2>/dev/null || { echo "the config app exited early; see $out/app.log" >&2; exit 1; }
 # With no window manager nothing gives the window input focus, and gpui then treats it as
 # inactive: focus listeners see an empty focus path, so focus-dependent styling never shows.
 # Focus it the way a desktop would on launch.
@@ -155,7 +155,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-kill -0 "$app_pid" 2>/dev/null || echo "warning: config-gpui exited during the run; see $out/app.log" >&2
+kill -0 "$app_pid" 2>/dev/null || echo "warning: the config app exited during the run; see $out/app.log" >&2
 if grep -q "panicked" "$out/app.log"; then
     echo "warning: a panic was logged; see $out/app.log" >&2
 fi

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive pack-editor-gpui on a private, headless X display and screenshot it. The pack editor's
+# Drive the pack editor (pack-editor-gpui/) on a private, headless X display and screenshot it. The pack editor's
 # version of config-gpui/scripts/ui-check.sh; see that script for the approach.
 #
 #   pack-editor-gpui/scripts/ui-check.sh [options] <out-dir> [step...]
@@ -93,17 +93,17 @@ mkdir -p "$tmp"/{bin,config,data,state,cache,runtime}
 chmod 700 "$tmp/runtime"
 
 # Several worktrees can share one CARGO_TARGET_DIR, and they all write the same
-# `debug/pack-editor-gpui`. Building and copying under one lock means this run gets the binary it
+# `debug/lewdware-pack-editor`. Building and copying under one lock means this run gets the binary it
 # just built, not another worktree's.
 mkdir -p "$target"
 (
     flock 9
     if [[ $build == 1 ]]; then
-        cargo build -q -p pack-editor-gpui
+        cargo build -q -p lewdware-pack-editor
         [[ -z $seed ]] || cargo build -q -p pack-editor-core --example seed_draft
         [[ -z $fixtures ]] || cargo build -q -p pack-editor-core --example seed_previews
     fi
-    cp "$target/debug/pack-editor-gpui" "$tmp/bin/"
+    cp "$target/debug/lewdware-pack-editor" "$tmp/bin/"
     [[ -z $seed ]] || cp "$target/debug/examples/seed_draft" "$tmp/bin/"
     [[ -z $fixtures ]] || cp "$target/debug/examples/seed_previews" "$tmp/bin/"
 ) 9>"$target/.pack-editor-ui-check.lock"
@@ -151,10 +151,10 @@ export DISPLAY=:$display
 fi
 
 env -u WAYLAND_DISPLAY "${xdg[@]}" "${renderer[@]}" \
-    "$tmp/bin/pack-editor-gpui" >"$out/app.log" 2>&1 &
+    "$tmp/bin/lewdware-pack-editor" >"$out/app.log" 2>&1 &
 app_pid=$!
 sleep "$settle"
-kill -0 "$app_pid" 2>/dev/null || { echo "pack-editor-gpui exited early; see $out/app.log" >&2; exit 1; }
+kill -0 "$app_pid" 2>/dev/null || { echo "the pack editor exited early; see $out/app.log" >&2; exit 1; }
 if [[ $gpu == 1 ]]; then
     # Headless Xwayland can consume its first injected event establishing seat/focus state.
     # Prime it on the start screen's empty background before running the requested steps.

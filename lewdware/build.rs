@@ -1,3 +1,5 @@
+// Windows with `static-ffmpeg` (release builds): the system libraries vcpkg's static FFmpeg needs
+// that ffmpeg-sys-next doesn't name itself. pack-editor-gpui/build.rs has the same list.
 fn main() {
     if cfg!(target_os = "windows") && cfg!(feature = "static-ffmpeg") {
         println!("cargo:rustc-link-lib=dylib=ole32");
@@ -11,5 +13,6 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=bcrypt");
         println!("cargo:rustc-link-lib=dylib=shlwapi");
         println!("cargo:rustc-link-lib=dylib=shell32");
+        println!("cargo:rustc-link-lib=dylib=advapi32");
     }
 }

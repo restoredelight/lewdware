@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Lewdware
+Comment=Lewdware session supervisor
+Exec=/usr/lib/lewdware/lewdware-supervisor
+Icon=lewdware
+Terminal=false
+NoDisplay=true

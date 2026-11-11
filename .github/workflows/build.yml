@@ -39,57 +39,47 @@ jobs:
             nasm \
             cmake \
             ninja-build \
+            meson \
             libssl-dev \
             libdbus-1-dev \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
             libasound2-dev \
             libx11-dev \
             libxi-dev \
             libxtst-dev \
             libxrandr-dev \
             libxcursor-dev \
-            libdav1d-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libfreetype-dev \
+            libfontconfig-dev \
+            libva-dev \
+            libdrm-dev \
             patchelf \
             xdg-utils
-      # cmake/ninja-build (alongside nasm, above) are for build_avifenc_sidecar.sh, which builds
-      # libavif + a local libaom from source -- no prebuilt static Linux avifenc is published
-      # upstream (see deploy/linux/build_avifenc_sidecar.sh).
-      # libdav1d-dev is what the `image` crate's `avif-native` feature decodes pack AVIFs with
-      # (dav1d-sys finds it by pkg-config or fails the build). It is BSD-2, not GPL, so unlike
-      # the ffmpeg packages below there is nothing to avoid here; build_installer_a.sh bundles
-      # the .so alongside the binaries the same way it does every other non-system dep.
-      # Note: no libavcodec-dev etc. here on purpose. Ubuntu's ffmpeg packages
-      # are built --enable-gpl (they depend on libx264-dev), so linking against
-      # them would make the distributed lewdware binary a GPL combined work.
-      # Installer A instead builds the `lewdware` crate with --features
-      # build-ffmpeg, which vendors and statically links a pristine, LGPL-only
-      # FFmpeg (see lewdware/Cargo.toml). `nasm` above is required to build
-      # that vendored copy.
+      # libxkbcommon-x11-dev, libwayland-dev, libfreetype-dev and libfontconfig-dev are gpui's,
+      # for the config app and the pack editor.
+      # nasm, cmake, ninja-build and meson build deploy/build_ffmpeg.sh's static, LGPL-only FFmpeg
+      # and its codec libraries (SVT-AV1, Opus, dav1d, libwebp), which the engine and the pack
+      # editor link with --features static-ffmpeg. libva-dev and libdrm-dev are for its VA-API
+      # support; those two stay host libraries. cmake/ninja-build are also for
+      # build_avifenc_sidecar.sh, which builds libavif + a local libaom from source -- no prebuilt
+      # static Linux avifenc is published upstream.
+      # Note: no libavcodec-dev or libdav1d-dev here on purpose. Ubuntu's ffmpeg packages are built
+      # --enable-gpl (they depend on libx264-dev), so linking against them would make the
+      # distributed binaries a GPL combined work; and the `image` crate's AVIF decoder links the
+      # static dav1d from the same prefix.
+
+      - name: Cache static FFmpeg
+        uses: actions/cache@v5
+        with:
+          path: build/ffmpeg-static
+          key: ffmpeg-static-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('deploy/build_ffmpeg.sh') }}
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 11
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 26
-          cache: 'pnpm'
-          cache-dependency-path: |
-            config/pnpm-lock.yaml
-            pack-editor/pnpm-lock.yaml
 
       - name: Build Installer A (Main Suite)
         run: ./deploy/linux/build_installer_a.sh
@@ -136,22 +126,23 @@ jobs:
       - name: Install brew dependencies
         run: |
           brew update
-          brew install nasm cmake ninja dav1d
-          echo "BREW_DEPS=$(brew ls --versions nasm cmake ninja dav1d | tr '\n' ' ')" >> $GITHUB_ENV
-      # dav1d is what the `image` crate's `avif-native` feature decodes pack AVIFs with
-      # (dav1d-sys finds it by pkg-config or fails the build). It is BSD-2, not GPL, so unlike
-      # ffmpeg below there is nothing to avoid here; build_installer_a.sh bundles the dylib into
-      # Frameworks/ the same way it does every other non-system dep.
-      # Note: no `brew install ffmpeg` here on purpose. Homebrew's ffmpeg
-      # formula is unconditionally built --enable-gpl --enable-libx264
-      # --enable-libx265 (its declared license is literally GPL-3.0-or-later),
-      # so linking against it would make the distributed lewdware binary a
-      # GPL combined work. Installer A instead builds the `lewdware` crate
-      # with --features build-ffmpeg, which vendors and statically links a
-      # pristine, LGPL-only FFmpeg (see lewdware/Cargo.toml). `nasm` above is
-      # required to build that vendored copy. `cmake`/`ninja` are for
-      # build_avifenc_sidecar.sh, which builds libavif + a local libaom from
-      # source since no prebuilt static macOS avifenc is published upstream.
+          brew install nasm cmake ninja meson
+          echo "BREW_DEPS=$(brew ls --versions nasm cmake ninja meson | tr '\n' ' ')" >> $GITHUB_ENV
+      # nasm, cmake, ninja and meson build deploy/build_ffmpeg.sh's static, LGPL-only FFmpeg and
+      # its codec libraries (SVT-AV1, Opus, dav1d, libwebp), which the engine and the pack editor
+      # link with --features static-ffmpeg; the `image` crate's AVIF decoder links the same static
+      # dav1d. cmake/ninja are also for build_avifenc_sidecar.sh, which builds libavif + a local
+      # libaom from source since no prebuilt static macOS avifenc is published upstream.
+      # Note: no `brew install ffmpeg` here on purpose. Homebrew's ffmpeg formula is
+      # unconditionally built --enable-gpl --enable-libx264 --enable-libx265 (its declared license
+      # is literally GPL-3.0-or-later), so linking against it would make the distributed binaries
+      # a GPL combined work.
+
+      - name: Cache static FFmpeg
+        uses: actions/cache@v5
+        with:
+          path: build/ffmpeg-static
+          key: ffmpeg-static-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('deploy/build_ffmpeg.sh') }}
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -160,20 +151,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           env-vars: BREW_DEPS
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 11
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 26
-          cache: 'pnpm'
-          cache-dependency-path: |
-            config/pnpm-lock.yaml
-            pack-editor/pnpm-lock.yaml
 
       - name: Build Installer A (Main Suite)
         run: ./deploy/macos/build_installer_a.sh
@@ -190,6 +167,10 @@ jobs:
   build-windows:
     name: Build Windows Packages
     runs-on: windows-latest
+    env:
+      # Static, LGPL-only (no `gpl` feature): the codec libraries the pack editor encodes with,
+      # and the hardware encoders it tries first. zlib is for PNG.
+      VCPKG_FFMPEG: ffmpeg[avcodec,avdevice,avfilter,avformat,swresample,swscale,zlib,dav1d,opus,webp,svt-av1,nvcodec,amf,qsv]:x64-windows-static-md
 
     steps:
       - name: Checkout repository
@@ -208,9 +189,9 @@ jobs:
           path: |
             vcpkg
             vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-vcpkg-static-${{ hashFiles('**/Cargo.lock') }}-${{ env.VCPKG_FFMPEG }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-vcpkg-static-
 
       - name: Install vcpkg
         shell: pwsh
@@ -223,12 +204,14 @@ jobs:
           }
           echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" >> $env:GITHUB_ENV
 
+      # x64-windows-static-md: static libraries against the dynamic CRT, which is the triplet
+      # vcpkg-rs (and so ffmpeg-sys-next with `static-ffmpeg`) looks in, linking each package's
+      # dependencies too. dav1d is also the `image` crate's AVIF decoder, found through pkg-config.
       - name: Install FFmpeg and dav1d via vcpkg
         shell: pwsh
         run: |
           & "$env:VCPKG_ROOT\vcpkg.exe" install pkgconf:x64-windows-release
-          & "$env:VCPKG_ROOT\vcpkg.exe" install dav1d:x64-windows-release
-          & "$env:VCPKG_ROOT\vcpkg.exe" install ffmpeg:x64-windows-release
+          & "$env:VCPKG_ROOT\vcpkg.exe" install dav1d:x64-windows-static-md "$env:VCPKG_FFMPEG"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -241,28 +224,16 @@ jobs:
       - name: Setup environment
         shell: pwsh
         run: |
-          echo "FFMPEG_DIR=${{ github.workspace }}\vcpkg\installed\x64-windows-release" >> $env:GITHUB_ENV
-          echo "PKG_CONFIG_PATH=${{ github.workspace }}\vcpkg\installed\x64-windows-release\lib\pkgconfig" >> $env:GITHUB_ENV
+          # No FFMPEG_DIR: ffmpeg-sys-next would take it over vcpkg and link the libav* libraries
+          # without the codec libraries they need.
+          echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${{ github.workspace }}\vcpkg\installed\x64-windows-static-md\lib\pkgconfig" >> $env:GITHUB_ENV
           echo "${{ github.workspace }}\vcpkg\installed\x64-windows-release\tools\pkgconf" >> $env:GITHUB_PATH
           echo "PKG_CONFIG=${{ github.workspace }}\vcpkg\installed\x64-windows-release\tools\pkgconf\pkgconf.exe" >> $env:GITHUB_ENV
 
       - name: Install Inno Setup
         run: choco install innosetup -y
         shell: pwsh
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 11
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 26
-          cache: 'pnpm'
-          cache-dependency-path: |
-            config/pnpm-lock.yaml
-            pack-editor/pnpm-lock.yaml
 
       - name: Build Installer A (Main Suite)
         shell: pwsh
@@ -354,7 +325,7 @@ jobs:
               'pub_date': pub_date,
               'download_page': 'https://lewdware.net/download/pack-editor',
               'assets': {
-                'windows-x64': f'{base}/lewdware-pack-editor_{version}_x86_64.msi',
+                'windows-x64': f'{base}/lewdware-pack-editor_{version}_x86_64.exe',
                 'macos-arm64': f'{base}/lewdware-pack-editor_{version}_arm64.dmg',
                 'macos-x64': f'{base}/lewdware-pack-editor_{version}_x86_64.dmg',
                 'linux-x64-deb': f'{base}/lewdware-pack-editor_{version}_x86_64.deb',

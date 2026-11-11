@@ -48,15 +48,15 @@ teardown drops the decoder channels and stops the audio player on the worker.
 ## Build and checks
 
 ```sh
-cargo build -p pack-editor-gpui
+cargo build -p lewdware-pack-editor
 cargo test -p media-gpui --lib
 cargo test -p pack-editor-core native_preview_range
 ```
 
-This adds system FFmpeg development/runtime libraries and dav1d to the GPUI editor's native
-dependencies. `pack-editor-gpui` exposes `static-ffmpeg` to forward the decoder's static-link
-feature; installer wiring remains part of the GPUI migration's packaging work. Build GPUI
-packages explicitly to avoid the Tauri/zbus feature-unification issue.
+Dev builds link the system's FFmpeg development libraries and dav1d. The pack editor forwards
+`static-ffmpeg`, which the installers use to link an LGPL-only FFmpeg statically, as the engine
+does, so the shipped editor isn't linked against a distro's GPL build: on Linux and macOS the one
+`deploy/build_ffmpeg.sh` builds (found through pkg-config), on Windows vcpkg's static triplet.
 
 Headless editor checks can seed valid media without importing through a desktop portal:
 

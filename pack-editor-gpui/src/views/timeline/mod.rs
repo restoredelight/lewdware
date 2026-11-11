@@ -38,11 +38,11 @@ use pack_editor_core::session::{Applied, Session};
 use shared::behaviour::editor as queries;
 use shared::behaviour::{Stage, Transition};
 
-use crate::views::media_slot::MediaSlotView;
 use crate::editor::{CommitPending, Editor, EditorEvent};
 use crate::shell::View;
 use crate::theme::{self, c};
 use crate::ui::{self, Button, DialogAction, Size, Toggle, Variant};
+use crate::views::media_slot::MediaSlotView;
 
 use fields::Spec;
 

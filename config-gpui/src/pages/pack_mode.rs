@@ -537,7 +537,10 @@ impl PackModePage {
                 };
                 let options = values
                     .iter()
-                    .map(|(id, member)| SelectOption::new(id.clone(), member.label.clone()))
+                    .map(|(id, member)| {
+                        SelectOption::new(id.clone(), member.label.clone())
+                            .description(member.description.clone())
+                    })
                     .collect();
                 div()
                     .w(px(240.))

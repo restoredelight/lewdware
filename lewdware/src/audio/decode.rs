@@ -581,7 +581,7 @@ mod sidecar {
         std::env::var_os("LEWDWARE_SIDECAR_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../pack-editor/src-tauri/binaries")
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../pack-editor-gpui/binaries")
             })
     }
 

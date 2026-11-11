@@ -1,6 +1,6 @@
 //! Dev-only: converts an Edgeware/Edgeware++ pack (directory or zip) into a real, loadable
-//! `.lwpack`, re-encoding media via a local ffmpeg/ffprobe. Undocumented, requires ffmpeg/ffprobe
-//! on `PATH` (or passed explicitly) -- see `behaviour-design/edgeware-compat.md` and
+//! `.lwpack`, re-encoding media through the linked ffmpeg libraries. Undocumented, requires
+//! avifenc on `PATH` (or passed explicitly) -- see `behaviour-design/edgeware-compat.md` and
 //! `design/release-plan.md` (M4): this exists for directory seeding and end-to-end testing
 //! before the pack editor's "Import Edgeware pack" front end lands. Not a product feature.
 
@@ -8,10 +8,10 @@ mod writer;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Parser;
 use converter::{DirSource, PackSource, ZipSource, convert};
-use shared::encode::{HardwareEncoder, init_binary_paths};
+use shared::encode::{HardwareEncoder, init_avifenc_path};
 
 #[derive(Parser)]
 struct Args {
@@ -19,37 +19,24 @@ struct Args {
     input: PathBuf,
     /// Where to write the converted `.lwpack`.
     output: PathBuf,
-    /// Override the `ffmpeg` binary used (defaults to a `PATH` lookup). Must be given together
-    /// with `--ffprobe`.
-    #[arg(long)]
-    ffmpeg: Option<PathBuf>,
-    /// Override the `ffprobe` binary used (defaults to a `PATH` lookup). Must be given together
-    /// with `--ffmpeg`.
-    #[arg(long)]
-    ffprobe: Option<PathBuf>,
-    /// Override the `avifenc` binary used (defaults to a `PATH` lookup). Must be given together
-    /// with `--ffmpeg`/`--ffprobe`.
+    /// Override the `avifenc` binary used (defaults to a `PATH` lookup).
     #[arg(long)]
     avifenc: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
+    // Encodes run in a child copy of this binary, so one bad file fails rather than crashing
+    // the conversion.
+    shared::encode::serve_encode_worker_if_requested();
+    if let Ok(exe) = std::env::current_exe() {
+        shared::encode::use_encode_worker(exe);
+    }
     let args = Args::parse();
 
-    // `shared::encode::get_ffmpeg_path`/`get_ffprobe_path`/`get_avifenc_path` fall back to the
-    // app's bundled sidecar names (`lewdware-ffmpeg`/`lewdware-ffprobe`/`lewdware-avifenc`) when
-    // unset, since that's what the shipped app needs. This dev tool's whole premise is a plain
-    // local install, so default to the ordinary `ffmpeg`/`ffprobe`/`avifenc` names instead of
-    // leaving that fallback in place.
-    match (args.ffmpeg, args.ffprobe, args.avifenc) {
-        (Some(ffmpeg), Some(ffprobe), Some(avifenc)) => init_binary_paths(ffmpeg, ffprobe, avifenc),
-        (None, None, None) => init_binary_paths(
-            PathBuf::from("ffmpeg"),
-            PathBuf::from("ffprobe"),
-            PathBuf::from("avifenc"),
-        ),
-        _ => bail!("--ffmpeg, --ffprobe and --avifenc must be given together"),
-    }
+    // `shared::encode::get_avifenc_path` falls back to the app's bundled sidecar name
+    // (`lewdware-avifenc`) when unset, since that's what the shipped app needs. This dev tool's
+    // whole premise is a plain local install, so default to the ordinary `avifenc` instead.
+    init_avifenc_path(args.avifenc.unwrap_or_else(|| PathBuf::from("avifenc")));
 
     let source: Box<dyn PackSource> = if args.input.is_dir() {
         Box::new(DirSource::new(&args.input))

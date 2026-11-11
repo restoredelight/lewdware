@@ -602,6 +602,9 @@ pub fn radio_group<T: PartialEq + Clone + 'static>(
 pub struct SelectOption<T> {
     pub value: T,
     pub label: SharedString,
+    /// Shown under the label in the open menu, never in the trigger: the trigger names the
+    /// current choice, it doesn't re-explain it.
+    pub description: Option<SharedString>,
     pub disabled: bool,
 }
 
@@ -610,8 +613,14 @@ impl<T> SelectOption<T> {
         Self {
             value,
             label: label.into(),
+            description: None,
             disabled: false,
         }
+    }
+
+    pub fn description(mut self, description: Option<impl Into<SharedString>>) -> Self {
+        self.description = description.map(Into::into);
+        self
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
@@ -753,14 +762,22 @@ impl<T: PartialEq + Clone + 'static> RenderOnce for Select<T> {
                                 .py(px(6.))
                                 .rounded(theme::RADIUS_SM)
                                 .text_size(px(13.))
-                                .truncate()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
                                 .border_l_2()
                                 .border_color(if selected {
                                     c(theme::ACCENT_HOVER)
                                 } else {
                                     gpui_kit::transparent_black()
                                 })
-                                .child(option.label)
+                                // Only the description wraps; the label stays on one line, so
+                                // a long explanation grows the row down instead of squeezing
+                                // the name it belongs to.
+                                .child(div().min_w_0().truncate().child(option.label))
+                                .when_some(option.description, |this, description| {
+                                    this.child(hint(description).text_size(px(11.)))
+                                })
                                 .when(option.disabled, |this| this.text_color(c(theme::MUTED)))
                                 .when(!option.disabled, |this| {
                                     this.cursor_pointer()

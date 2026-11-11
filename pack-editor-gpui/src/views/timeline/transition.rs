@@ -159,8 +159,7 @@ impl TimelineView {
                 })
             }),
         );
-        let timing = section("Timing", "", None)
-        .child(field_grid(vec![
+        let timing = section("Timing", "", None).child(field_grid(vec![
             duration.into_any_element(),
             easing.into_any_element(),
         ]));

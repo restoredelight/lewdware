@@ -3,8 +3,8 @@
 //! choice, stored as nothing (see `pack_editor_core::session::popup`).
 
 use gpui_kit::component::input::Input;
-use gpui_kit::component::slider::{Slider, SliderValue};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::slider::{Slider, SliderValue};
 use gpui_kit::prelude::*;
 use gpui_kit::{div, px, AnyElement, Context, Div, Focusable, FontWeight, SharedString, Window};
 use pack_editor_core::session::popup::{describe_region, is_capped, popup_size, REFERENCE_SCREEN};
@@ -72,16 +72,12 @@ impl Viewer {
 
         let entity = cx.entity();
         let place = entity.clone();
-        let header = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Popup settings"),
-            );
+        let header = div().flex().flex_col().gap_1().child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Popup settings"),
+        );
 
         let frequency = section()
             .child(rail_label("Spawn frequency (x)"))
@@ -114,22 +110,20 @@ impl Viewer {
             options.push(SelectOption::new(MonitorChoice::Any, "Any monitor"));
             options.push(SelectOption::new(MonitorChoice::Primary, "Primary monitor"));
             let set = entity.clone();
-            section()
-                .child(rail_label("Monitor"))
-                .child(Select::new("popup-monitor", selected, options).on_change(
-                    move |choice, _, cx| {
-                        let monitor = match choice {
-                            MonitorChoice::Mixed => return,
-                            MonitorChoice::Any => None,
-                            MonitorChoice::Primary => Some(MonitorPreference::Primary),
-                        };
-                        set.update(cx, |this, cx| {
-                            let (targets, label) =
-                                (this.targets(), this.label("Set popup monitor", cx));
-                            this.apply(cx, |s| s.set_popup_monitor(&targets, monitor, &label));
-                        })
-                    },
-                ))
+            section().child(rail_label("Monitor")).child(
+                Select::new("popup-monitor", selected, options).on_change(move |choice, _, cx| {
+                    let monitor = match choice {
+                        MonitorChoice::Mixed => return,
+                        MonitorChoice::Any => None,
+                        MonitorChoice::Primary => Some(MonitorPreference::Primary),
+                    };
+                    set.update(cx, |this, cx| {
+                        let (targets, label) =
+                            (this.targets(), this.label("Set popup monitor", cx));
+                        this.apply(cx, |s| s.set_popup_monitor(&targets, monitor, &label));
+                    })
+                }),
+            )
         };
 
         let video = any_video.then(|| {

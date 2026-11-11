@@ -19,13 +19,22 @@ mkdir -p "$STAGE_DIR/DEBIAN"
 mkdir -p "$STAGE_DIR/usr/bin"
 mkdir -p "$STAGE_DIR/usr/lib/lewdware"
 mkdir -p "$STAGE_DIR/usr/share/applications"
-mkdir -p "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps"
+for size in 32 64 128 256 512; do
+  mkdir -p "$STAGE_DIR/usr/share/icons/hicolor/${size}x${size}/apps"
+done
 mkdir -p "$STAGE_DIR/usr/share/doc/lewdware"
 mkdir -p "$OUTPUT_DIR"
 
 # Ship the MIT license alongside the binaries - MIT's own terms require the
 # copyright/permission notice to accompany copies of the software.
 cp "LICENSE" "$STAGE_DIR/usr/share/doc/lewdware/copyright"
+
+# Static, LGPL-only FFmpeg with SVT-AV1, Opus, dav1d and libwebp (deploy/build_ffmpeg.sh; a no-op
+# when build/ffmpeg-static is already up to date). Its pkg-config files go first on the path so
+# that FFmpeg is what `--features static-ffmpeg` links, along with the libraries it needs, and so
+# the `image` crate's AVIF decoder links the same static dav1d.
+"$(dirname "$0")/../build_ffmpeg.sh" build/ffmpeg-static
+export PKG_CONFIG_PATH="$PWD/build/ffmpeg-static/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 # 1. Compile all applications
 echo "🔨 Compiling applications..."
@@ -36,24 +45,18 @@ for mode in sandbox experience; do
   (cd "default-modes/$mode" && ../../target/release/lw mode build)
 done
 
-# Compile lewdware with a relative rpath targeting the bundled libs.
-# --features build-ffmpeg vendors and statically links FFmpeg from pristine
-# upstream source (LGPL-only, no --enable-gpl/libx264) instead of linking
-# Ubuntu's GPL-licensed libavcodec.so etc - see lewdware/Cargo.toml.
+# Compile lewdware with a relative rpath targeting the bundled libs, and the static FFmpeg built
+# above rather than Ubuntu's GPL-licensed libavcodec.so - see lewdware/THIRD_PARTY_LICENSES.md.
 echo "   Compiling lewdware with relative rpath..."
-cargo rustc -p lewdware --release --features build-ffmpeg -- -C link-args="-Wl,-rpath,\$ORIGIN/../lib/lewdware"
+cargo rustc -p lewdware --release --features static-ffmpeg -- -C link-args="-Wl,-rpath,\$ORIGIN/../lib/lewdware"
 
 echo "   Compiling supervisor..."
 cargo build -p lewdware-supervisor --release
 
-# Compile Tauri GUI
-echo "🔨 Building config GUI..."
-cd config
-pnpm install
-export APPIMAGE_EXTRACT_AND_RUN=1
-export NO_STRIP=1
-pnpm tauri build
-cd ..
+# The config app (config-gpui/). Its binary is plainly `lewdware`; the engine's is
+# `lewdware-engine`. It embeds the default modes built above.
+echo "🔨 Building config app..."
+cargo build -p lewdware-config --release
 
 # 2. Stage binaries
 echo "Staging binaries..."
@@ -64,10 +67,9 @@ cp "target/release/lewdware-supervisor" "$STAGE_DIR/usr/lib/lewdware/lewdware-su
 chmod +x "$STAGE_DIR/usr/bin/"* "$STAGE_DIR/usr/lib/lewdware/lewdware-engine" "$STAGE_DIR/usr/lib/lewdware/lewdware-supervisor"
 
 # 3. Dynamic Library Bundling (transitive deps of any dynamically-linked libs).
-# FFmpeg is statically linked into lewdware-engine (see the --features
-# build-ffmpeg cargo invocation above), so it won't show up here. libdav1d
-# will: the `image` crate's avif-native feature links the system one, which is
-# why the workflow installs libdav1d-dev.
+# FFmpeg and its codec libraries, dav1d included, are statically linked into
+# lewdware-engine (see the --features static-ffmpeg cargo invocation above), so
+# they won't show up here. libva and libdrm will, and stay host dependencies.
 echo "Bundling dynamic library dependencies..."
 
 # System libraries that must remain as host deps (UI, audio, core runtime).
@@ -89,7 +91,8 @@ is_system_lib() {
     libwebkit2gtk*.so* | libjavascriptcoregtk*.so* | libsoup*.so* | \
     libdbus-1.so* | libsystemd.so* | libudev.so* | \
     libmount.so* | libblkid.so* | libuuid.so* | libpcre2*.so* | libffi.so* | \
-    libexpat.so* | libselinux.so* | libssl.so* | libcrypto.so*)
+    libexpat.so* | libselinux.so* | libssl.so* | libcrypto.so* | \
+    libva.so* | libva-drm.so* | libdrm.so*)
       return 0 ;;
     *) return 1 ;;
   esac
@@ -134,35 +137,18 @@ for bin in "$STAGE_DIR/usr/bin/"*; do
   patchelf --set-rpath '$ORIGIN/../lib/lewdware' "$bin" 2>/dev/null || true
 done
 
-# 4. Create Desktop File and Icon
-echo "Creating desktop entries..."
-cat <<EOF > "$STAGE_DIR/usr/share/applications/lewdware.desktop"
-[Desktop Entry]
-Name=Lewdware
-Comment=Configure and launch Lewdware
-Exec=lewdware
-Icon=lewdware
-Terminal=false
-Type=Application
-Categories=Utility;Development;
-EOF
-
-# Portal identity for the windowless supervisor (also used in compositor permission dialogs).
-cat <<EOF > "$STAGE_DIR/usr/share/applications/com.lewdware.supervisor.desktop"
-[Desktop Entry]
-Name=Lewdware
-Comment=Lewdware session supervisor
-Exec=/usr/lib/lewdware/lewdware-supervisor
-Icon=lewdware
-Terminal=false
-Type=Application
-NoDisplay=true
-EOF
-
-# Copy app icon if exists (use a placeholder if not)
-if [ -f "config/src-tauri/icons/128x128.png" ]; then
-  cp "config/src-tauri/icons/128x128.png" "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps/lewdware.png"
-fi
+# 4. Desktop files and icons
+#
+# The config app's desktop file is named after its window's app id (config-gpui/src/main.rs):
+# that is how Wayland and X11 desktops find the window's icon, since gpui can't set one itself on
+# Linux. The supervisor's is its portal identity (it has no window), also used in compositor
+# permission dialogs.
+echo "Installing desktop entries and icons..."
+cp "deploy/linux/com.lewdware.config.desktop" "$STAGE_DIR/usr/share/applications/"
+cp "deploy/linux/com.lewdware.supervisor.desktop" "$STAGE_DIR/usr/share/applications/"
+for size in 32 64 128 256 512; do
+  cp "assets/icons/${size}x${size}.png" "$STAGE_DIR/usr/share/icons/hicolor/${size}x${size}/apps/lewdware.png"
+done
 
 # 5. Create Debian Package control file
 echo "Creating Debian control file..."
@@ -172,7 +158,8 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: ${DEB_ARCH}
-Depends: libasound2, libdbus-1-3, libx11-6, libxi6, libxtst6, libxrandr2, libxcursor1, libgtk-3-0, libwebkit2gtk-4.1-0
+Depends: libasound2, libdbus-1-3, libx11-6, libxi6, libxtst6, libxrandr2, libxcursor1, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libfreetype6, libvulkan1, libva2, libva-drm2, libdrm2
+Recommends: mesa-vulkan-drivers
 Maintainer: restoredelight <restoreddelight@proton.me>
 Homepage: https://lewdware.net
 Description: Lewdware (Config GUI, Supervisor, Engine, and lw CLI tool)
@@ -225,7 +212,7 @@ if command -v rpmbuild &> /dev/null; then
   mkdir -p "$RPM_STAGE_DIR"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 
   cat <<EOF > "$RPM_STAGE_DIR/SPECS/lewdware.spec"
-# FFmpeg/dav1d are statically linked into lewdware-engine (build-ffmpeg
+# FFmpeg/dav1d are statically linked into lewdware-engine (static-ffmpeg
 # feature), so they no longer appear as separate .so files here - these
 # excludes just guard against auto-generated requires/provides for whatever
 # ends up bundled in usr/lib/lewdware/.
@@ -240,7 +227,8 @@ Release:        1
 Summary:        Lewdware (Config GUI, Supervisor, Engine, and lw CLI tool)
 License:        MIT
 URL:            https://lewdware.net
-Requires:       alsa-lib, dbus-libs, libX11, libXi, libXtst, libXrandr, libXcursor, gtk3, webkit2gtk4.1
+Requires:       alsa-lib, dbus-libs, libX11, libXi, libXtst, libXrandr, libXcursor, libxcb, libxkbcommon, libxkbcommon-x11, freetype, vulkan-loader, libva, libdrm
+Recommends:     mesa-vulkan-drivers
 
 %description
 Lewdware, containing the config GUI, supervisor, engine, and lw CLI tool.
@@ -249,13 +237,13 @@ Lewdware, containing the config GUI, supervisor, engine, and lw CLI tool.
 mkdir -p %{buildroot}/usr/bin
 mkdir -p %{buildroot}/usr/lib/lewdware
 mkdir -p %{buildroot}/usr/share/applications
-mkdir -p %{buildroot}/usr/share/icons/hicolor/128x128/apps
+mkdir -p %{buildroot}/usr/share/icons
 mkdir -p %{buildroot}/usr/share/licenses/lewdware
 
 cp -p %{staged_dir}/usr/bin/* %{buildroot}/usr/bin/
 cp -pr %{staged_dir}/usr/lib/lewdware/* %{buildroot}/usr/lib/lewdware/
 cp -p %{staged_dir}/usr/share/applications/* %{buildroot}/usr/share/applications/
-cp -p %{staged_dir}/usr/share/icons/hicolor/128x128/apps/* %{buildroot}/usr/share/icons/hicolor/128x128/apps/
+cp -pr %{staged_dir}/usr/share/icons/hicolor %{buildroot}/usr/share/icons/
 cp -p %{staged_dir}/usr/share/doc/lewdware/copyright %{buildroot}/usr/share/licenses/lewdware/LICENSE
 
 # The rpm counterpart of the deb preinst/prerm above: stop a running install before its files
@@ -287,9 +275,9 @@ exit 0
 /usr/bin/lewdware
 /usr/bin/lw
 /usr/lib/lewdware/*
-/usr/share/applications/lewdware.desktop
+/usr/share/applications/com.lewdware.config.desktop
 /usr/share/applications/com.lewdware.supervisor.desktop
-/usr/share/icons/hicolor/128x128/apps/lewdware.png
+/usr/share/icons/hicolor/*/apps/lewdware.png
 %license /usr/share/licenses/lewdware/LICENSE
 EOF
 
@@ -316,17 +304,11 @@ mkdir -p "$TAR_ROOT/lib/lewdware"
 # Copy lw CLI
 cp "$STAGE_DIR/usr/bin/lw" "$TAR_ROOT/bin/"
 
-# Copy config AppImage as the user-facing lewdware binary. The file is named after productName
-# in config/src-tauri/tauri.conf.json ("Lewdware"), which the bundler does not lowercase - hence
-# -iname. The tar.gz is advertised in docs/src/data/latest.json as the portable Linux download,
-# so shipping one without the GUI in it would be worse than failing the build.
-APPIMAGE_PATH=$(find "target/release/bundle/appimage/" -iname "lewdware_${VERSION}_*.AppImage" 2>/dev/null | head -1)
-if [ ! -f "$APPIMAGE_PATH" ]; then
-  echo "Error: config AppImage not found under target/release/bundle/appimage/!" >&2
-  exit 1
-fi
-cp "$APPIMAGE_PATH" "$TAR_ROOT/bin/lewdware"
-chmod +x "$TAR_ROOT/bin/lewdware"
+# The config app, already rpath'd to ../lib/lewdware above, which is this layout too.
+cp "$STAGE_DIR/usr/bin/lewdware" "$TAR_ROOT/bin/lewdware"
+
+# Desktop files and icons, for anyone copying the tree into a prefix.
+cp -r "$STAGE_DIR/usr/share" "$TAR_ROOT/share"
 
 # Copy dynamic libraries, the supervisor, and the engine (internal processes)
 cp "$STAGE_DIR/usr/lib/lewdware/"* "$TAR_ROOT/lib/lewdware/"
@@ -341,13 +323,15 @@ cat << 'EOF' > "$TAR_ROOT/README.md"
 This portable distribution contains the Lewdware Config app, Supervisor, Engine, and lw CLI.
 
 ## Structure
-* `bin/lewdware`: Lewdware Config app (AppImage) — start here
+* `bin/lewdware`: Lewdware Config app — start here
 * `bin/lw`: Lewdware CLI
 * `lib/lewdware/`: Supervisor, Engine, and any bundled dynamic libraries (FFmpeg and dav1d are statically linked into the engine)
+* `share/`: desktop entries and icons
 * `LICENSE`: MIT license covering this software
 
 ## Running
-Ensure you have the basic client dependencies installed on your Linux distribution (X11, ALSA, etc.).
+Ensure you have the basic client dependencies installed on your Linux distribution (X11 or
+Wayland, xkbcommon, Vulkan drivers, ALSA, etc.).
 Simply run the config app from the `bin` directory:
 ```bash
 ./bin/lewdware

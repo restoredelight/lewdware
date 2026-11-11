@@ -143,7 +143,9 @@ fn title_button(
         .hover(|style| style.bg(c(theme::SURFACE)).text_color(c(theme::TEXT)))
         .child(icon)
         // Not a drag of the titlebar it sits in.
-        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation()
+        })
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
             on_click(window, cx)
@@ -490,7 +492,12 @@ pub fn warnings_dialog(
                             .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
                                 cx.stop_propagation()
                             })
-                            .child(popup_frame("Import warnings", vec![close], Some(body), None)),
+                            .child(popup_frame(
+                                "Import warnings",
+                                vec![close],
+                                Some(body),
+                                None,
+                            )),
                     ),
             ),
     )

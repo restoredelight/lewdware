@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
-//! The pack editor, ported to gpui. Runs beside `pack-editor/` until it can replace it; see
-//! `README.md` for what's ported.
+// No console window behind the app on Windows. Debug builds keep it, for logs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+//! The pack editor. See `README.md`.
 
 mod app;
 mod editor;
@@ -17,6 +18,8 @@ use gpui_kit::{
 };
 
 fn main() {
+    // Before anything else: as an encode worker this process does one encode and exits.
+    shared::encode::serve_encode_worker_if_requested();
     let _log_guard = shared::logging::init("pack-editor").expect("Couldn't start logs");
     use_bundled_binaries();
     editor::detect_encoder();
@@ -36,7 +39,9 @@ fn main() {
                     title: Some(app::APP_TITLE.into()),
                     ..Default::default()
                 }),
-                app_id: Some("lewdware-pack-editor".into()),
+                // The desktop file's name, and the Flatpak's app id: desktops match the window
+                // to it for its icon.
+                app_id: Some("com.lewdware.pack-editor".into()),
                 ..Default::default()
             };
             gpui_kit::open_window(options, cx, |window, cx| {
@@ -73,22 +78,48 @@ fn bind_keys(cx: &mut App) {
     cx.bind_keys(bindings);
 }
 
-/// The ffmpeg, ffprobe and avifenc sidecars ship in `binaries/` next to the executable (the Tauri
-/// build put them in its resource directory). Without them, `shared::encode` looks on `PATH`.
+/// Encodes run in a child copy of this executable (see `shared::encode::use_encode_worker`), so a
+/// file that crashes a decoder fails its import instead of closing the editor.
+///
+/// Images are the one thing still encoded by a separate program: the avifenc sidecar ships in a
+/// `binaries/` directory the installers put beside the executable (see `sidecar_dirs`). Without
+/// it, `shared::encode` looks on `PATH`.
 fn use_bundled_binaries() {
-    let Some(dir) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("binaries")))
-    else {
-        return;
-    };
-    let exe = |name: &str| dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    let (ffmpeg, ffprobe, avifenc) = (
-        exe("lewdware-ffmpeg"),
-        exe("lewdware-ffprobe"),
-        exe("lewdware-avifenc"),
-    );
-    if ffmpeg.exists() && ffprobe.exists() && avifenc.exists() {
-        shared::encode::init_binary_paths(ffmpeg, ffprobe, avifenc);
+    if let Ok(exe) = std::env::current_exe() {
+        shared::encode::use_encode_worker(exe);
     }
+    for dir in sidecar_dirs() {
+        let avifenc = dir.join(format!("lewdware-avifenc{}", std::env::consts::EXE_SUFFIX));
+        if avifenc.exists() {
+            shared::encode::init_avifenc_path(avifenc);
+            return;
+        }
+    }
+}
+
+/// Where each package puts the sidecar, relative to the executable:
+///
+/// - Windows: `binaries\` beside the `.exe`.
+/// - macOS: `Contents/Resources/binaries/`, from `Contents/MacOS/`.
+/// - Linux (`.deb`, `.rpm`, tarball, Flatpak): `lib/lewdware-pack-editor/binaries/`, from `bin/`.
+///
+/// Debug builds also look in the crate's own `binaries/`, where the `deploy/*/download_*`
+/// scripts stage them.
+fn sidecar_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.canonicalize().ok())
+        .and_then(|exe| exe.parent().map(|dir| dir.to_owned()))
+    {
+        dirs.push(dir.join("binaries"));
+        if let Some(parent) = dir.parent() {
+            dirs.push(parent.join("Resources").join("binaries"));
+            dirs.push(parent.join("lib/lewdware-pack-editor/binaries"));
+        }
+    }
+    if cfg!(debug_assertions) {
+        dirs.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries"));
+    }
+    dirs
 }

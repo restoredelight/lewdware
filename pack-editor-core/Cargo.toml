@@ -6,7 +6,7 @@ authors = ["restoredelight <restoreddelight@proton.me>"]
 edition = "2021"
 
 [dependencies]
-shared = { path = "../shared" }
+shared = { path = "../shared", features = ["encode"] }
 converter = { path = "../converter" }
 anyhow = "1"
 blake3 = "1.8"

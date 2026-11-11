@@ -2,6 +2,7 @@
 # deploy/macos/build_installer_a.sh
 # macOS Build & Package script for Lewdware Main Suite (Installer A)
 set -e
+source "$(dirname "$0")/bundle.sh"
 
 # Configuration
 APP_NAME="Lewdware"
@@ -19,7 +20,14 @@ mkdir -p "$BUILD_DIR/root/Applications"
 mkdir -p "$BUILD_DIR/scripts"
 mkdir -p "$OUTPUT_DIR"
 
-# 1. Compile all applications dynamically
+# Static, LGPL-only FFmpeg with SVT-AV1, Opus, dav1d and libwebp (deploy/build_ffmpeg.sh; a no-op
+# when build/ffmpeg-static is already up to date). Its pkg-config files go first on the path so
+# that FFmpeg is what `--features static-ffmpeg` links, along with the libraries it needs, and so
+# the `image` crate's AVIF decoder links the same static dav1d.
+"$(dirname "$0")/../build_ffmpeg.sh" build/ffmpeg-static
+export PKG_CONFIG_PATH="$PWD/build/ffmpeg-static/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+# 1. Compile all applications
 echo "Compiling applications..."
 cargo build -p lw --release
 
@@ -28,41 +36,29 @@ for mode in sandbox experience; do
   (cd "default-modes/$mode" && ../../target/release/lw mode build)
 done
 
-# --features build-ffmpeg vendors and statically links FFmpeg from pristine
-# upstream source (LGPL-only, no --enable-gpl/libx264/libx265) instead of
-# linking Homebrew's ffmpeg, whose formula is declared GPL-3.0-or-later -
-# see lewdware/Cargo.toml.
-cargo build -p lewdware --release --features build-ffmpeg
+# The static FFmpeg built above, not Homebrew's, whose formula is declared GPL-3.0-or-later - see
+# lewdware/THIRD_PARTY_LICENSES.md.
+cargo build -p lewdware --release --features static-ffmpeg
 cargo build -p lewdware-supervisor --release
 
-# Compile Tauri GUI
-echo "Building config GUI..."
-cd config
-pnpm install
-pnpm tauri build --bundles app
-cd ..
+# The config app (config-gpui/), whose binary is `lewdware`. It embeds the default modes built
+# above.
+echo "Building config app..."
+cargo build -p lewdware-config --release
 
-# 2. Copy config.app package to our staging area
-echo "📦 Staging config.app bundle..."
-# The bundle is named after productName in config/src-tauri/tauri.conf.json ("Lewdware");
-# -iname keeps this working if that casing ever changes.
-CONFIG_APP=$(find "target/release/bundle/macos" -maxdepth 1 -iname "lewdware.app" | head -n 1)
-if [ -z "$CONFIG_APP" ]; then
-  echo "Error: config .app bundle not found under target/release/bundle/macos/" >&2
-  exit 1
-fi
-cp -R "$CONFIG_APP" "$BUILD_DIR/root/Applications/Lewdware.app"
+# 2. Assemble Lewdware.app around it
+echo "📦 Assembling Lewdware.app..."
+make_app_bundle "$BUILD_DIR/root/Applications/Lewdware.app" "target/release/lewdware" \
+  lewdware "$APP_NAME" "$BUNDLE_ID" "$VERSION"
 
 # Ship the MIT license inside the app bundle - MIT's own terms require the
 # copyright/permission notice to accompany copies of the software.
-mkdir -p "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Resources"
 cp "LICENSE" "$BUILD_DIR/root/Applications/Lewdware.app/Contents/Resources/LICENSE"
 
-# Rename internal binary to config-tauri if needed, ensuring the plist matches
-# Tauri usually handles this. Let's make sure our CLI and Engine live in the same directory.
-MAC_BIN_DIR="$BUILD_DIR/root/Applications/Lewdware.app/Contents/MacOS"
-FRAMEWORKS_DIR="$BUILD_DIR/root/Applications/Lewdware.app/Contents/Frameworks"
-mkdir -p "$FRAMEWORKS_DIR"
+# The CLI, supervisor and engine live beside the config app, which is where
+# shared::binaries looks for them.
+APP_DIR="$BUILD_DIR/root/Applications/Lewdware.app"
+MAC_BIN_DIR="$APP_DIR/Contents/MacOS"
 
 # Copy CLI, Supervisor, and Engine into the bundle
 cp "target/release/lw" "$MAC_BIN_DIR/lw"
@@ -71,46 +67,16 @@ cp "target/release/lewdware-engine" "$MAC_BIN_DIR/lewdware-engine"
 chmod +x "$MAC_BIN_DIR/lw" "$MAC_BIN_DIR/lewdware-supervisor" "$MAC_BIN_DIR/lewdware-engine"
 
 # 3. Dynamic Library Bundling and Relinking (dylib)
-# FFmpeg is statically linked into lewdware-engine (see the --features
-# build-ffmpeg cargo invocation above), so it won't show up here. libdav1d
-# will: the `image` crate's avif-native feature links Homebrew's, which is why
-# the workflow installs it.
+# FFmpeg and its codec libraries, dav1d included, are statically linked (see
+# the --features static-ffmpeg cargo invocation above), so they won't show up
+# here.
 echo "Resolving dynamic library dependencies..."
 
-# Recursively copy all non-system dylib deps of $1 into Frameworks/ and relink.
-# Handles transitive deps (libvpx, libopus, libaom, etc.) automatically.
-bundle_dylib() {
-  local target="$1"
-  while IFS= read -r dep; do
-    case "$dep" in
-      /usr/lib/* | /System/* | @* | "") continue ;;
-    esac
-    local lib_name
-    lib_name=$(basename "$dep")
-    local staged="$FRAMEWORKS_DIR/$lib_name"
-    install_name_tool -change "$dep" "@executable_path/../Frameworks/$lib_name" "$target"
-    if [ ! -f "$staged" ]; then
-      echo "   Bundling $dep"
-      cp "$dep" "$staged"
-      chmod 755 "$staged"
-      install_name_tool -id "@executable_path/../Frameworks/$lib_name" "$staged"
-      bundle_dylib "$staged"
-    fi
-  done < <(otool -L "$target" | tail -n +2 | awk '{print $1}')
-}
+for bin in lewdware-engine lewdware-supervisor lw lewdware; do
+  bundle_dylibs "$APP_DIR" "$MAC_BIN_DIR/$bin"
+done
 
-bundle_dylib "$MAC_BIN_DIR/lewdware-engine"
-bundle_dylib "$MAC_BIN_DIR/lewdware-supervisor"
-bundle_dylib "$MAC_BIN_DIR/lw"
-bundle_dylib "$MAC_BIN_DIR/lewdware"
-
-find "$FRAMEWORKS_DIR" -type f -name "*.dylib" -exec codesign --force --sign - {} \;
-
-codesign --force --sign - "$MAC_BIN_DIR/lw"
-codesign --force --sign - "$MAC_BIN_DIR/lewdware-supervisor"
-codesign --force --sign - "$MAC_BIN_DIR/lewdware-engine"
-codesign --force --sign - "$MAC_BIN_DIR/lewdware"
-codesign --force --sign - "$BUILD_DIR/root/Applications/Lewdware.app"
+sign_app "$APP_DIR"
 
 # 4. Create the preinstall script, which shuts down a running install before it gets replaced
 echo "📝 Creating installer preinstall script..."

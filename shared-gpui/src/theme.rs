@@ -1,8 +1,8 @@
 //! The design tokens from `shared-ui/DESIGN.md`, as gpui colours, plus the bundled UI fonts and
 //! the gpui-component theme they are fed into.
 //!
-//! `shared-ui/styles/tokens.css` is still the source of truth while the Tauri app exists. Change a
-//! value there and here together.
+//! This file is the source of truth for the tokens. Change a value here and in `DESIGN.md`'s
+//! palette table together.
 
 use std::borrow::Cow;
 

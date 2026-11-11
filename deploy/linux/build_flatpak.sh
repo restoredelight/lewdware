@@ -2,13 +2,10 @@
 # deploy/linux/build_flatpak.sh
 # Flatpak packaging for Lewdware Pack Editor.
 #
-# The distro-independent Linux package. Unlike the AppImage it bundles no WebKitGTK of its own --
-# it runs against the GNOME runtime's, which is built to work with the host's graphics drivers, so
-# none of `shared/src/utils.rs`'s AppImage rendering workarounds apply and the editor's video
-# preview works. See com.lewdware.pack-editor.yml.
+# The distro-independent Linux package. See com.lewdware.pack-editor.yml.
 #
-# Reuses the .deb the Tauri bundler already produced (Tauri's own recommendation), so this stays in
-# step with what the other Linux packages ship rather than restating the file layout.
+# Reuses the .deb build_installer_b.sh already produced, so this stays in step with what the other
+# Linux packages ship rather than restating the file layout.
 set -e
 
 MANIFEST_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,19 +25,16 @@ command -v flatpak-builder >/dev/null || {
   exit 1
 }
 
-# 1. Find the .deb. `build_installer_b.sh` stages one in dist/; a bare `pnpm tauri build` leaves it
-#    under target/. Either will do -- but the manifest needs one fixed path, so stage a copy under
-#    the name it names.
+# 1. Find the .deb `build_installer_b.sh` staged in dist/. The manifest needs one fixed path, so
+#    stage a copy under the name it names.
 echo "🔎 Locating the pack editor .deb..."
 STAGED_DEB="dist/lewdware-pack-editor.deb"
 # Excluded from the search, or a staged copy left behind by an interrupted run becomes its own
 # source on the next one.
 trap 'rm -f "$STAGED_DEB"' EXIT
-DEB=$(find dist target/release/bundle/deb -maxdepth 1 -type f \
-  -iname "lewdware?pack?editor*.deb" ! -name "$(basename "$STAGED_DEB")" 2>/dev/null | head -1)
-if [ -z "$DEB" ]; then
-  echo "Error: no pack editor .deb found. Run deploy/linux/build_installer_b.sh (or" >&2
-  echo "       'cd pack-editor && pnpm tauri build --bundles deb') first." >&2
+DEB="dist/lewdware-pack-editor_${VERSION}_${ARCH}.deb"
+if [ ! -f "$DEB" ]; then
+  echo "Error: $DEB not found. Run deploy/linux/build_installer_b.sh first." >&2
   exit 1
 fi
 mkdir -p dist
@@ -48,8 +42,7 @@ cp "$DEB" "$STAGED_DEB"
 echo "Using $DEB"
 
 # 2. Build into a local repo, then export a single installable file. The bundle is the point: it
-#    is what an AppImage user expects -- one download, `flatpak install ./that-file`, no remote to
-#    add and no store account.
+#    is one download, `flatpak install ./that-file`, no remote to add and no store account.
 echo "🔨 Building the Flatpak..."
 BUILD_DIR="build/flatpak"
 rm -rf "$BUILD_DIR/build-dir" "$BUILD_DIR/repo"

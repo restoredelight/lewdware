@@ -1,5 +1,6 @@
 # deploy/windows/build_installer_b.ps1
-# Windows Build & Packaging script for Lewdware Pack Editor (Installer B)
+# Windows Build & Packaging script for Lewdware Pack Editor (Installer B): an Inno Setup installer,
+# like the main suite's (installer_b.iss).
 
 $ErrorActionPreference = "Stop"
 
@@ -11,36 +12,53 @@ function Check-LastExitCode {
     }
 }
 
+$VERSION = (Select-String -Path "Cargo.toml" -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+
 # 1. Stage FFmpeg & ffprobe if not already present
 & "$PSScriptRoot\download_ffmpeg_sidecars.ps1"
 
 # 1b. Stage the avifenc sidecar if not already present
 & "$PSScriptRoot\download_avifenc_sidecar.ps1"
 
-# 2. Build the Tauri app
-Write-Host "Building pack-editor GUI..."
-Push-Location pack-editor
-pnpm install
-Check-LastExitCode
-pnpm tauri build
-Check-LastExitCode
-Pop-Location
-
-# 3. Stage outputs
-Write-Host "Staging outputs..."
-if (!(Test-Path "dist")) { New-Item -ItemType Directory -Path "dist" }
-
-$VERSION = (Select-String -Path "Cargo.toml" -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-
-# The .msi name comes from tauri.conf.json's productName ("Lewdware Pack Editor"), which the
-# bundler does not sanitise for file names - match on a pattern that tolerates the spaces.
-$INSTALLER = Get-ChildItem -Path "target\release\bundle" -Filter "*.msi" -Recurse |
-    Where-Object { $_.Name -match '(?i)lewdware.pack.editor' } |
-    Select-Object -First 1
-if ($INSTALLER) {
-    $DEST = "dist\lewdware-pack-editor_${VERSION}_x86_64.msi"
-    Copy-Item $INSTALLER.FullName -Destination $DEST -Force
-    Write-Host "SUCCESS: Staged lewdware-pack-editor_${VERSION}_x86_64.msi in dist/"
-} else {
-    Write-Error "Could not find generated MSI package under target/release/bundle/"
+# 1c. The Visual C++ Redistributable. build_installer_a.ps1 caches the same file; fetch it here
+# only when this runs on its own.
+$vcRedist = "build\vc_redist.x64.exe"
+if (-not (Test-Path $vcRedist)) {
+    New-Item -ItemType Directory -Force -Path "build" | Out-Null
+    $attempts = 3
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        Write-Host "Downloading Visual C++ Redistributable (attempt $attempt/$attempts)..."
+        try {
+            Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcRedist
+            break
+        } catch {
+            Remove-Item -Path $vcRedist -Force -ErrorAction SilentlyContinue
+            if ($attempt -eq $attempts) {
+                throw "Could not download the Visual C++ Redistributable: $_"
+            }
+            Start-Sleep -Seconds (5 * $attempt)
+        }
+    }
 }
+
+# 2. Build the editor, linking vcpkg's static FFmpeg (LGPL) as the engine does; the icon is
+# embedded by build.rs.
+Write-Host "Building the pack editor..."
+cargo build -p lewdware-pack-editor --release --features static-ffmpeg
+Check-LastExitCode
+
+# 3. Build the installer
+Write-Host "Compiling Inno Setup installer..."
+$isccCmd = Get-Command "iscc" -ErrorAction SilentlyContinue
+if ($isccCmd) {
+    $ISCC = $isccCmd.Source
+} elseif (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+    $ISCC = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+} else {
+    Write-Error "Inno Setup compiler (iscc) not found! Installer package could not be built."
+    exit 1
+}
+
+& $ISCC "/DAppVersion=$VERSION" deploy\windows\installer_b.iss
+Check-LastExitCode
+Write-Host "SUCCESS: Staged lewdware-pack-editor_${VERSION}_x86_64.exe in dist/"

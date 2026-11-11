@@ -8,7 +8,7 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)" ; exit 1 ;;
 esac
 
-BINARIES_DIR="pack-editor/src-tauri/binaries"
+BINARIES_DIR="pack-editor-gpui/binaries"
 mkdir -p "$BINARIES_DIR"
 
 FFMPEG_SIDECAR="$BINARIES_DIR/lewdware-ffmpeg"

@@ -1,31 +1,26 @@
 # Flatpak manifest for the Lewdware Pack Editor.
 #
-# Why this exists alongside the .deb and .rpm: those two cover Debian/Ubuntu and Fedora/RHEL, and
-# the AppImage covered everything else -- badly. An AppImage bundles its own WebKitGTK and GL
-# stack, which then disagrees with the host's, and the workarounds that follows (see
-# `shared/src/utils.rs`) break `<video>` in the editor's media preview outright. A Flatpak bundles
-# no such thing: it runs against the GNOME runtime's WebKitGTK, which is built to work with host
-# drivers through the `org.freedesktop.Platform.GL` extension. Same reason a dev build has never
-# had the problem -- a WebKit that matches its graphics stack.
+# The distro-independent Linux package, alongside the .deb, .rpm and tarball. It needs nothing
+# from the host but a Flatpak install: the runtime carries xkbcommon, FreeType, dav1d and the ALSA
+# plugin that routes sound to the PulseAudio socket, and the GL extension carries the host's
+# Vulkan driver.
 #
-# Built from the .deb rather than from source, as Tauri's own Flatpak guide recommends
-# (https://v2.tauri.app/distribute/flatpak/): the bundler has already staged the binary, the
-# sidecars, the icons and the desktop entry in there, so extracting it keeps this manifest from
-# drifting away from what the other Linux packages ship.
+# Built from the .deb build_installer_b.sh produced, so this stays in step with what the other
+# Linux packages ship rather than restating the file layout. The .deb's tree is relocatable (the
+# editor finds its sidecars at `../lib/lewdware-pack-editor/binaries` from its executable), and its
+# desktop file and icon are already named after this app id.
 id: com.lewdware.pack-editor
 
-# 49 rather than the 47 Tauri's guide names: 47 is retired, and the runtime's WebKitGTK version is
-# the whole point of choosing Flatpak here -- it has to be new enough to decode AVIF (the pack
-# format's image codec) and to render video without the fallbacks the AppImage needs.
-runtime: org.gnome.Platform
-runtime-version: '49'
-sdk: org.gnome.Sdk
+# The plain freedesktop runtime: gpui draws with Vulkan and needs no toolkit. (The Tauri build used
+# GNOME's for its WebKitGTK.)
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
 
 command: lewdware-pack-editor
 
 finish-args:
-  # Windowing and GPU. `--device=dri` is what lets the runtime's WebKit use the host's driver
-  # through the GL extension, which is the difference between this and the AppImage.
+  # Windowing and GPU. `--device=dri` gives Vulkan the host's driver through the GL extension.
   - --socket=wayland
   - --socket=fallback-x11
   - --share=ipc
@@ -33,15 +28,12 @@ finish-args:
   # Deliberately no `LIBVA_DRIVERS_PATH` here. The runtime's libva is already built with a search
   # path that covers every place a driver can land: `.../dri` and its `intel-vaapi-driver` /
   # `nvidia-vaapi-driver` subdirectories, plus `.../GL/lib/dri`, which is where Flatpak aggregates
-  # whichever GL extensions the host actually resolved (mesa's `radeonsi_drv_video.so` for AMD, an
-  # `org.freedesktop.Platform.GL.nvidia-*` extension for Nvidia). Setting the variable would
-  # *replace* that path with a snapshot of one runtime's layout, so it would break on exactly the
-  # hosts it was meant to help. Verified: `h264_vaapi` encodes in a stock runtime with the variable
-  # unset, and libva's own trace lists the four directories above.
+  # whichever GL extensions the host actually resolved. Setting the variable would *replace* that
+  # path with a snapshot of one runtime's layout, so it would break on exactly the hosts it was
+  # meant to help. The ffmpeg sidecar uses it for hardware encoding.
   #
-  # The editor previews media over an HTTP server bound to 127.0.0.1 (see `media_server.rs`) and
-  # checks for updates over the network.
-  - --share=network
+  # No network: the editor makes no requests.
+  #
   # Sound, for previewing a pack's audio and the audio track of its videos.
   - --socket=pulseaudio
   # Packs are the user's own files, opened and saved from wherever they keep them.
@@ -53,24 +45,11 @@ modules:
     build-commands:
       - mkdir -p deb-extract
       - ar -x *.deb --output deb-extract
-      - tar -C deb-extract -xf deb-extract/data.tar.gz
-      # The binary, plus the ffmpeg/ffprobe/avifenc sidecars and licence files that Tauri stages
-      # beside it. `cp -a` keeps the executable bits the sidecars need.
-      - install -Dm755 deb-extract/usr/bin/lewdware-pack-editor /app/bin/lewdware-pack-editor
-      - |
-        if [ -d "deb-extract/usr/lib/Lewdware Pack Editor" ]; then
-          mkdir -p "/app/lib/Lewdware Pack Editor"
-          cp -a "deb-extract/usr/lib/Lewdware Pack Editor/." "/app/lib/Lewdware Pack Editor/"
-        fi
-      # Desktop entry and icons, renamed to the app id as Flatpak requires.
-      - install -Dm644 deb-extract/usr/share/applications/*.desktop /app/share/applications/com.lewdware.pack-editor.desktop
-      - desktop-file-edit --set-key=Icon --set-value=com.lewdware.pack-editor /app/share/applications/com.lewdware.pack-editor.desktop
-      - |
-        for size in 32x32 128x128 256x256@2; do
-          src=$(ls deb-extract/usr/share/icons/hicolor/$size/apps/*.png 2>/dev/null | head -1)
-          [ -n "$src" ] && install -Dm644 "$src" \
-            "/app/share/icons/hicolor/$size/apps/com.lewdware.pack-editor.png"
-        done
+      # `tar -xf` detects the payload's compression itself, whichever dpkg-deb chose.
+      - tar -C deb-extract -xf deb-extract/data.tar.*
+      # The binary, the sidecars, the licences, the desktop file and the icons. `cp -a` keeps the
+      # executable bits the sidecars need.
+      - cp -a deb-extract/usr/. /app/
       - install -Dm644 com.lewdware.pack-editor.metainfo.xml /app/share/metainfo/com.lewdware.pack-editor.metainfo.xml
     sources:
       - type: file

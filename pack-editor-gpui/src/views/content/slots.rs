@@ -82,7 +82,9 @@ impl ContentView {
             Slot::Splash => self.slots.splash.clone(),
         };
         let current = slot.current(self);
-        entity.update(cx, |view, cx| view.set(current, slot.empty_note().into(), cx));
+        entity.update(cx, |view, cx| {
+            view.set(current, slot.empty_note().into(), cx)
+        });
         div()
             .flex()
             .flex_col()

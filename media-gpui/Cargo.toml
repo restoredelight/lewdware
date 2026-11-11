@@ -21,4 +21,5 @@ tracing = "0.1"
 tempfile = "3"
 
 [features]
+# Link FFmpeg statically, as release builds do. Same as the engine's feature (lewdware/Cargo.toml).
 static-ffmpeg = ["ffmpeg-next/static"]

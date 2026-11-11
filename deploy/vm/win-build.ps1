@@ -1,13 +1,13 @@
 # Dev build inside the Windows test VM (run from a `vmctl sync`ed checkout).
 #
 #   vmctl ssh -- 'powershell -ExecutionPolicy Bypass -File C:\lw\lewdware\deploy\vm\win-build.ps1'                      # engine, supervisor, config
-#   vmctl ssh -- 'powershell -ExecutionPolicy Bypass -File C:\lw\lewdware\deploy\vm\win-build.ps1 -Targets engine,config-gpui'
+#   vmctl ssh -- 'powershell -ExecutionPolicy Bypass -File C:\lw\lewdware\deploy\vm\win-build.ps1 -Targets engine,pack-editor'
 #
-# Targets: engine, supervisor, config (Tauri), config-gpui, pack-editor, lw.
+# Targets: engine, supervisor, config, pack-editor, lw.
 # Everything lands in target\debug (or target\release with -Release), next to
 # each other, which is where shared::binaries looks for sibling binaries.
 # Toolchain (installed once): MSVC Build Tools + clang component, rustup,
-# vcpkg at C:\vcpkg with pkgconf/dav1d/ffmpeg (x64-windows-release), Node, pnpm, Git.
+# vcpkg at C:\vcpkg with pkgconf/dav1d/ffmpeg (x64-windows-release), Git.
 
 param(
     [string[]]$Targets = @("engine", "supervisor", "config"),
@@ -50,24 +50,13 @@ if (-not $SkipModes) {
     }
 }
 
-function Tauri([string]$dir) {
-    Push-Location $dir
-    try {
-        Run pnpm @("install", "--frozen-lockfile")
-        $a = @("tauri", "build", "--no-bundle")
-        if (-not $Release) { $a += "--debug" }
-        Run pnpm $a
-    } finally { Pop-Location }
-}
-
 foreach ($t in $Targets) {
     switch ($t) {
         "engine"      { Run cargo (@("build", "-p", "lewdware") + $profileArgs) }
         "supervisor"  { Run cargo (@("build", "-p", "lewdware-supervisor") + $profileArgs) }
         "lw"          { Run cargo (@("build", "-p", "lw") + $profileArgs) }
-        "config-gpui" { Run cargo (@("build", "-p", "config-gpui") + $profileArgs) }
-        "config"      { Tauri "config" }
-        "pack-editor" { Tauri "pack-editor" }
+        "config"      { Run cargo (@("build", "-p", "lewdware-config") + $profileArgs) }
+        "pack-editor" { Run cargo (@("build", "-p", "lewdware-pack-editor") + $profileArgs) }
         default       { throw "unknown target '$t'" }
     }
 }

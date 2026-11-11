@@ -53,15 +53,14 @@ unsafe extern "C" fn get_hw_format(
     ffi::AVPixelFormat::AV_PIX_FMT_NONE
 }
 
-// Returns the hw pixel format (e.g. AV_PIX_FMT_VAAPI) on success.
+// Returns the hw pixel format (e.g. AV_PIX_FMT_VAAPI) on success. `codec` must be the decoder the
+// context is then opened with: hardware configs belong to a decoder, not to a codec id.
 unsafe fn try_hw_setup(
     ctx: *mut ffi::AVCodecContext,
+    codec: *const ffi::AVCodec,
     hw_type: ffi::AVHWDeviceType,
     wgpu_device: &std::sync::Arc<wgpu::Device>,
 ) -> Option<ffi::AVPixelFormat> {
-    // ctx->codec is NULL before avcodec_open2; find the decoder via codec_id instead.
-    let codec_id = unsafe { (*ctx).codec_id };
-    let codec = unsafe { ffi::avcodec_find_decoder(codec_id) };
     if codec.is_null() {
         return None;
     }
@@ -97,6 +96,120 @@ unsafe fn try_hw_setup(
     }
 
     Some(hw_pix_fmt)
+}
+
+/// Opens `codec` on a stream, set up for hardware decoding when there is a device to decode onto
+/// and the decoder supports it. Returns the hardware pixel format alongside, if so.
+fn open_decoder(
+    parameters: codec::Parameters,
+    codec: ffmpeg::Codec,
+    wgpu_device: Option<&Arc<wgpu::Device>>,
+) -> Result<(ffmpeg::decoder::Video, Option<ffi::AVPixelFormat>)> {
+    let mut context = codec::Context::from_parameters(parameters)?;
+
+    // Hardware setup has to happen before avcodec_open2, which `open_as` runs.
+    let hw_pix_fmt = wgpu_device.and_then(|device| unsafe {
+        let ctx_ptr = context.as_mut_ptr();
+        let fmt = try_hw_setup(ctx_ptr, codec.as_ptr(), preferred_hw_type(), device)?;
+        HW_PIX_FMT.with(|c| c.set(fmt as i32));
+        (*ctx_ptr).get_format = Some(get_hw_format);
+        Some(fmt)
+    });
+
+    let decoder = context.decoder().open_as(codec)?.video()?;
+    Ok((decoder, hw_pix_fmt))
+}
+
+/// Set once an AV1 video has failed to decode on the GPU, so later ones go straight to software
+/// rather than each paying for a failed hardware attempt.
+static AV1_HARDWARE_UNSUPPORTED: AtomicBool = AtomicBool::new(false);
+
+/// Opens an AV1 decoder, on the GPU where it can decode AV1.
+///
+/// The decoder ffmpeg picks for AV1 by default is libdav1d, which is software-only: it has no
+/// hardware configs, so AV1 used to fall back to software decoding everywhere. Hardware decoding
+/// lives in ffmpeg's native `av1` decoder instead, but that one has no software path at all. It
+/// advertises its VA-API/D3D11/VideoToolbox config whether or not the GPU actually decodes AV1,
+/// and on one that doesn't it fails at the first packet instead of falling back. So it gets a trial
+/// on the opening packets, and libdav1d takes over if no hardware frame comes out of it.
+fn open_av1_decoder(
+    ictx: &mut ffmpeg::format::context::Input,
+    stream_index: usize,
+    parameters: codec::Parameters,
+    wgpu_device: Option<&Arc<wgpu::Device>>,
+) -> Result<(ffmpeg::decoder::Video, Option<ffi::AVPixelFormat>)> {
+    let software = |parameters: codec::Parameters| {
+        let codec = codec::decoder::find_by_name("libdav1d")
+            .or_else(|| codec::decoder::find(codec::Id::AV1))
+            .context("No AV1 decoder")?;
+        open_decoder(parameters, codec, None)
+    };
+
+    let native = codec::decoder::find_by_name("av1");
+    let (Some(device), Some(native)) = (wgpu_device, native) else {
+        return software(parameters);
+    };
+    if AV1_HARDWARE_UNSUPPORTED.load(Ordering::Relaxed) {
+        return software(parameters);
+    }
+
+    let hardware = match open_decoder(parameters.clone(), native, Some(device)) {
+        Ok((decoder, Some(hw_pix_fmt))) => Some((decoder, hw_pix_fmt)),
+        Ok((_, None)) => None,
+        Err(err) => {
+            tracing::debug!("Opening the hardware AV1 decoder failed: {err}");
+            None
+        }
+    };
+
+    if let Some((mut decoder, hw_pix_fmt)) = hardware {
+        let works = decodes_hardware_frame(ictx, stream_index, &mut decoder, hw_pix_fmt);
+        ictx.seek(0, ..0)?;
+        if works {
+            decoder.flush();
+            return Ok((decoder, Some(hw_pix_fmt)));
+        }
+    }
+
+    tracing::info!("No hardware AV1 decoding available; decoding AV1 in software");
+    AV1_HARDWARE_UNSUPPORTED.store(true, Ordering::Relaxed);
+    software(parameters)
+}
+
+/// Feeds the opening packets of a stream to `decoder` until a frame comes out, and reports
+/// whether it came out on the GPU. The caller rewinds the input afterwards.
+fn decodes_hardware_frame(
+    ictx: &mut ffmpeg::format::context::Input,
+    stream_index: usize,
+    decoder: &mut ffmpeg::decoder::Video,
+    hw_pix_fmt: ffi::AVPixelFormat,
+) -> bool {
+    // An AV1 decoder emits its first frame after a handful of packets at most; this only bounds
+    // the trial for a stream that is broken in some other way.
+    const MAX_PACKETS: usize = 32;
+
+    let mut frame = Video::empty();
+    let is_hardware = |frame: &Video| unsafe { (*frame.as_ptr()).format } == hw_pix_fmt as i32;
+
+    let mut sent = 0;
+    for (stream, packet) in ictx.packets() {
+        if stream.index() != stream_index {
+            continue;
+        }
+        if decoder.send_packet(&packet).is_err() {
+            return false;
+        }
+        if decoder.receive_frame(&mut frame).is_ok() {
+            return is_hardware(&frame);
+        }
+        sent += 1;
+        if sent == MAX_PACKETS {
+            return false;
+        }
+    }
+
+    // A very short stream can hold every frame back until the end.
+    decoder.send_eof().is_ok() && decoder.receive_frame(&mut frame).is_ok() && is_hardware(&frame)
 }
 
 /// A video decoder using ffmpeg.
@@ -798,23 +911,14 @@ fn decode_video(
     // to hold — and unlike a per-frame duration it is stated in presentation terms, so B-frame
     // reordering cannot skew it (see `frame_timing`).
     let total_duration = stream_duration(&video_stream, time_base);
+    let parameters = video_stream.parameters();
 
-    let mut context_decoder = codec::Context::from_parameters(video_stream.parameters())?;
-
-    // Attempt hardware decoding setup before avcodec_open2 (which happens inside .video()).
-    let hw_pix_fmt: Option<ffi::AVPixelFormat> = wgpu_device.as_ref().and_then(|device| unsafe {
-        let ctx_ptr = context_decoder.as_mut_ptr();
-        let hw_type = preferred_hw_type();
-        if let Some(fmt) = try_hw_setup(ctx_ptr, hw_type, device) {
-            HW_PIX_FMT.with(|c| c.set(fmt as i32));
-            (*ctx_ptr).get_format = Some(get_hw_format);
-            Some(fmt)
-        } else {
-            None
-        }
-    });
-
-    let mut decoder = context_decoder.decoder().video()?;
+    let (mut decoder, hw_pix_fmt) = if parameters.id() == codec::Id::AV1 {
+        open_av1_decoder(&mut ictx, stream_index, parameters, wgpu_device.as_ref())?
+    } else {
+        let codec = codec::decoder::find(parameters.id()).context("No decoder for this video")?;
+        open_decoder(parameters, codec, wgpu_device.as_ref())?
+    };
 
     // Limit (software-decoding) thread count to 1
     decoder.set_threading(codec::threading::Config {

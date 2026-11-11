@@ -18,11 +18,11 @@ SolidCompression=yes
 ChangesEnvironment=yes
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
-SetupIconFile=..\..\config\src-tauri\icons\icon.ico
+SetupIconFile=..\..\assets\icons\icon.ico
 ; Without this the Apps & features entry has no icon next to it.
 UninstallDisplayIcon={app}\lewdware.exe
 UninstallDisplayName=Lewdware
-; The bundled DLLs and the vc_redist are x64-only.
+; The binaries and the vc_redist are x64-only.
 ArchitecturesAllowed=x64compatible
 LicenseFile=..\..\LICENSE
 ; StopLewdware (see [Code]) shuts everything down in PrepareToInstall, which runs *before* this
@@ -32,6 +32,17 @@ CloseApplications=yes
 ; ...but don't let the Restart Manager relaunch the supervisor behind the user's back once the
 ; install finishes. Starting a session is the user's call.
 RestartApplications=no
+
+; FFmpeg is linked statically now. Clear out the DLLs earlier versions installed beside the exe.
+[InstallDelete]
+Type: files; Name: "{app}\avcodec-*.dll"
+Type: files; Name: "{app}\avformat-*.dll"
+Type: files; Name: "{app}\avutil-*.dll"
+Type: files; Name: "{app}\avfilter-*.dll"
+Type: files; Name: "{app}\avdevice-*.dll"
+Type: files; Name: "{app}\swscale-*.dll"
+Type: files; Name: "{app}\swresample-*.dll"
+Type: files; Name: "{app}\dav1d.dll"
 
 [Files]
 ; MIT license - shown during install above, and kept alongside the binaries
@@ -44,8 +55,6 @@ Source: "..\..\target\release\lewdware-engine.exe"; DestDir: "{app}"; Flags: ign
 Source: "..\..\target\release\lewdware-supervisor.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; CLI
 Source: "..\..\target\release\lw.exe"; DestDir: "{app}"; Flags: ignoreversion
-; DLLs (copied from staging)
-Source: "..\..\target\release\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Visual C++ Redistributable (extracted to temp and deleted after install)
 Source: "..\..\build\win-stage\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 

@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $LIBAVIF_TAG = "v1.4.2"
 
-$BINARIES_DIR = "pack-editor\src-tauri\binaries"
+$BINARIES_DIR = "pack-editor-gpui\binaries"
 if (!(Test-Path $BINARIES_DIR)) {
     New-Item -ItemType Directory -Force -Path $BINARIES_DIR | Out-Null
 }

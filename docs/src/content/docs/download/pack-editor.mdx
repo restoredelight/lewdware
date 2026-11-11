@@ -24,7 +24,7 @@ installer entry.
 
 <DownloadSection
   windowsUrl={latest.assets['windows-x64']}
-  windowsExt="msi"
+  windowsExt="exe"
   macosArm64Url={latest.assets['macos-arm64']}
   macosX64Url={latest.assets['macos-x64']}
   macosExt="dmg"
@@ -49,7 +49,7 @@ installer entry.
     },
     {
       label: '.tar.gz',
-      desc: 'Any distribution — needs WebKitGTK 4.1 and GTK 3',
+      desc: 'Any distribution — needs a Vulkan driver',
       x64: latest.assets['linux-x64-tar'],
       arm64: latest.assets['linux-arm64-tar'],
     },

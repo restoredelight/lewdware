@@ -66,55 +66,21 @@ foreach ($mode in @("sandbox", "experience")) {
     Pop-Location
 }
 
-cargo build -p lewdware --release
+# Links FFmpeg statically from vcpkg's x64-windows-static-md triplet (the workflow installs it, with
+# SVT-AV1, Opus, dav1d and libwebp), so there are no FFmpeg DLLs to ship.
+cargo build -p lewdware --release --features static-ffmpeg
 Check-LastExitCode
 
 cargo build -p lewdware-supervisor --release
 Check-LastExitCode
 
-# Compile Tauri GUI. Only the raw target\release\lewdware.exe is used here - installer_a.iss
-# packages it directly - so --no-bundle skips producing MSI/NSIS installers nobody consumes.
-Write-Host "Building config GUI..."
-Push-Location config
-pnpm install
+# The config app (config-gpui\), whose binary is lewdware.exe. It embeds the default modes built
+# above, and its icon (build.rs).
+Write-Host "Building config app..."
+cargo build -p lewdware-config --release
 Check-LastExitCode
-pnpm tauri build --no-bundle
-Check-LastExitCode
-Pop-Location
 
-# 2. Dynamic Library Copying (vcpkg integration)
-Write-Host "Locating and copying dynamic library dependencies (FFmpeg and dav1d)..."
-$VCPKG_BIN_PATH = ""
-if ($env:VCPKG_ROOT) {
-    $VCPKG_BIN_PATH = Join-Path $env:VCPKG_ROOT "installed\x64-windows-release\bin"
-} elseif (Test-Path "vcpkg") {
-    $VCPKG_BIN_PATH = "vcpkg\installed\x64-windows-release\bin"
-}
-
-if ($VCPKG_BIN_PATH -and (Test-Path $VCPKG_BIN_PATH)) {
-    Write-Host "   Copying DLLs from $VCPKG_BIN_PATH to target/release..."
-    Copy-Item "$VCPKG_BIN_PATH\avcodec-*.dll" -Destination "target/release/"
-    Copy-Item "$VCPKG_BIN_PATH\avformat-*.dll" -Destination "target/release/"
-    Copy-Item "$VCPKG_BIN_PATH\avutil-*.dll" -Destination "target/release/"
-    Copy-Item "$VCPKG_BIN_PATH\swscale-*.dll" -Destination "target/release/"
-    Copy-Item "$VCPKG_BIN_PATH\swresample-*.dll" -Destination "target/release/"
-    Copy-Item "$VCPKG_BIN_PATH\avdevice-*.dll" -Destination "target/release/"
-    Copy-Item "$VCPKG_BIN_PATH\avfilter-*.dll" -Destination "target/release/"
-    Copy-Item "$VCPKG_BIN_PATH\dav1d.dll" -Destination "target/release/"
-} else {
-    Write-Error "Vcpkg bin directory not found. Please make sure FFmpeg and dav1d DLLs are present."
-}
-
-# Verify that all DLL dependencies are present in target/release
-$requiredDlls = @("avcodec", "avformat", "avutil", "swscale", "swresample", "avdevice", "avfilter", "dav1d")
-foreach ($dllName in $requiredDlls) {
-    $found = Get-ChildItem "target/release/" -Filter "*$dllName*.dll"
-    if (-not $found) {
-        Write-Error "Required DLL dependency '$dllName' is missing from target/release! Aborting build."
-    }
-}
-
-# 3. Build the Installer using Inno Setup
+# 2. Build the Installer using Inno Setup
 Write-Host "Compiling Inno Setup installer..."
 $isccCmd = Get-Command "iscc" -ErrorAction SilentlyContinue
 if ($isccCmd) {

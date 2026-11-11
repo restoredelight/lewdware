@@ -1,7 +1,7 @@
 [package]
-name = "pack-editor-gpui"
+name = "lewdware-pack-editor"
 version.workspace = true
-description = "Create and edit Lewdware packs (gpui port)"
+description = "Create and edit Lewdware packs"
 authors = ["restoredelight <restoreddelight@proton.me>"]
 edition = "2021"
 
@@ -19,7 +19,7 @@ futures = "0.3"
 image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg"] }
 smallvec = "1"
 # async-std, not tokio: zbus's tokio backend (rfd's or ashpd's `tokio` feature) makes gpui panic
-# at startup. See config-gpui/README.md, "zbus feature unification". Build with `-p`.
+# at startup. See config-gpui/README.md, "zbus feature unification".
 rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "wayland", "async-std"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
@@ -33,4 +33,9 @@ ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
 keepawake = "0.6"
 
 [features]
+# Release builds: link the LGPL-only FFmpeg statically, as the engine does. See
+# `media-gpui`'s feature of the same name.
 static-ffmpeg = ["media-gpui/static-ffmpeg"]
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

@@ -193,8 +193,7 @@ impl TimelineView {
         let all_tags = self.author_tags(cx);
         let restricts = stage.content.tags.is_some();
         let restrict_id = id.clone();
-        let mut card = section("Content", "", None)
-        .child(toggle_row(
+        let mut card = section("Content", "", None).child(toggle_row(
             "Active tags",
             previous.map(|previous| {
                 match &previous.content.tags {
@@ -234,12 +233,7 @@ impl TimelineView {
 
         let exclude_id = id.clone();
         card = card
-            .child(toggle_row(
-                "Excluded tags",
-                None,
-                div(),
-                true,
-            ))
+            .child(toggle_row("Excluded tags", None, div(), true))
             .child(self.tag_list(
                 format!("{id}-exclude"),
                 &stage.content.exclude,

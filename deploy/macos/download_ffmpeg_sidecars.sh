@@ -14,7 +14,7 @@ else
   exit 1
 fi
 
-BINARIES_DIR="pack-editor/src-tauri/binaries"
+BINARIES_DIR="pack-editor-gpui/binaries"
 mkdir -p "$BINARIES_DIR"
 
 FFMPEG_SIDECAR="$BINARIES_DIR/lewdware-ffmpeg"

@@ -12,46 +12,55 @@ governed by whatever license that copy of FFmpeg carries - this is a
 different (stronger) form of combination than pack-editor's use of FFmpeg as
 a subprocess (see `pack-editor/THIRD_PARTY_LICENSES.md`).
 
-**Official release builds** (produced by `.github/workflows/build.yml` for
-Linux and macOS) compile the `lewdware` crate with the `build-ffmpeg` cargo
-feature, which vendors and statically links FFmpeg from pristine upstream
-source, built *without* `--enable-gpl`/`--enable-nonfree`/`libx264`/`libx265`.
-This keeps the linked FFmpeg under its default **LGPL version 2.1 or later**
-license, so the released `lewdware`/`config`/`lw` binaries can remain
+**Official release builds** (produced by `.github/workflows/build.yml`) link
+FFmpeg statically with the `static-ffmpeg` cargo feature, against a build that
+is configured *without* `--enable-gpl`/`--enable-version3`/`--enable-nonfree`
+and without `libx264`/`libx265`. This keeps the linked FFmpeg under its default
+**LGPL version 2.1 or later** license, so the released binaries can remain
 genuinely MIT (with the lighter LGPL obligations below), rather than becoming
 a GPL combined work.
 
+- Linux and macOS: [`deploy/build_ffmpeg.sh`](../deploy/build_ffmpeg.sh)
+  builds pristine upstream FFmpeg and its codec libraries from source, at the
+  versions it pins, with the configure flags it lists. It refuses to finish if
+  the configured FFmpeg isn't LGPL-2.1.
+- Windows: `vcpkg`'s `ffmpeg` port in the `x64-windows-static-md` triplet,
+  with the features listed in the workflow's `VCPKG_FFMPEG` and no `gpl`
+  feature, which is also LGPL-only.
 - Deliberately avoided: Ubuntu's `apt` `libavcodec-dev` and Homebrew's
   `ffmpeg` formula, both of which are built `--enable-gpl` (Homebrew's
   formula is explicitly declared `GPL-3.0-or-later`) and would make a linked
   binary a GPL combined work if distributed.
-- Windows release builds link FFmpeg via `vcpkg`'s `ffmpeg` port using its
-  default features only (no `gpl`/`x264` feature requested), which is also
-  LGPL-only - no special build step is needed there.
-- AV1 decoding uses `libdav1d` (BSD-2-Clause), vendored via the
-  `ffmpeg-next/build-lib-dav1d` feature - this doesn't affect FFmpeg's
-  license.
+
+The codec libraries linked in with it are under permissive licenses, which
+don't affect FFmpeg's:
+
+| Library | Used for | License |
+| --- | --- | --- |
+| [dav1d](https://code.videolan.org/videolan/dav1d) | AV1 decoding (and the `image` crate's AVIF decoding) | BSD-2-Clause |
+| [Opus](https://opus-codec.org) | audio | BSD-3-Clause |
+| [libwebp](https://chromium.googlesource.com/webm/libwebp) | WebP thumbnails | BSD-3-Clause |
+| [SVT-AV1](https://gitlab.com/AOMediaCodec/SVT-AV1) | AV1 encoding (pack editor) | BSD-3-Clause-Clear, plus the AOMedia patent license |
+| [nv-codec-headers](https://github.com/FFmpeg/nv-codec-headers) | NVENC (Linux; headers only) | MIT |
+
+On Linux, libva, libdrm and zlib stay dynamic host libraries.
 
 Because FFmpeg is statically linked, LGPLv2.1 §6 applies: recipients must be
 able to obtain the means to relink the engine against a modified version of
 FFmpeg. In practice this just means the exact FFmpeg source and build
 configuration must stay available - it's pristine, unmodified upstream
 FFmpeg source (<https://ffmpeg.org>, <https://github.com/FFmpeg/FFmpeg>),
-built via the configure invocation in the vendored
-[`ffmpeg-sys-next`](https://crates.io/crates/ffmpeg-sys-next) crate's
-`build.rs` with the flags noted above (no GPL/nonfree components enabled).
-FFmpeg's LGPL license text is available at
-<https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt>.
+built by the script and vcpkg configuration named above. FFmpeg's LGPL license
+text is available at <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt>.
 
 ### Local development builds
 
-Without `--features build-ffmpeg`, `cargo build` links dynamically against
+Without `--features static-ffmpeg`, `cargo build` links dynamically against
 whatever FFmpeg is installed on your system (per the root README's "Getting
 started" section) for faster iteration. That system FFmpeg may well be a
 GPL build (e.g. from `apt`/Homebrew) - that's fine for local development,
-but if *you* redistribute a binary built this way, you take on the same GPL
-considerations documented in `pack-editor/THIRD_PARTY_LICENSES.md`. Official
-releases always use the vendored LGPL-only build described above.
+but if *you* redistribute a binary built this way, you take on the GPL's
+obligations. Official releases always use the LGPL-only build described above.
 
 ## Bundled fonts
 

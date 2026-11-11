@@ -309,8 +309,7 @@ impl Viewer {
             self.ids.retain(|&id| media.get(id).is_some());
         } else {
             let mut ids = list.to_vec();
-            if let Some(id) = current.filter(|&id| media.get(id).is_some() && !list.contains(&id))
-            {
+            if let Some(id) = current.filter(|&id| media.get(id).is_some() && !list.contains(&id)) {
                 ids.insert(self.index.min(ids.len()), id);
             }
             self.ids = ids;
@@ -603,11 +602,8 @@ impl Viewer {
                 if typing {
                     this.border_color(rgba(0x1c1c1c99)).bg(gpui_kit::white())
                 } else {
-                    this.border_color(gpui_kit::transparent_black()).hover(|style| {
-                        style
-                            .border_color(rgba(0x0000004d))
-                            .bg(rgba(0xffffff99))
-                    })
+                    this.border_color(gpui_kit::transparent_black())
+                        .hover(|style| style.border_color(rgba(0x0000004d)).bg(rgba(0xffffff99)))
                 }
             })
             .tooltip(|window, cx| {

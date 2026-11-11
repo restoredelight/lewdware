@@ -669,10 +669,17 @@ impl Render for Shell {
                     let grab = event.drag(cx).0.get();
                     let bounds = event.bounds;
                     // The titlebar sits inside the window's 1px border.
-                    let corner = event.event.position - grab - bounds.origin - gpui_kit::point(px(1.), px(1.));
+                    let corner = event.event.position
+                        - grab
+                        - bounds.origin
+                        - gpui_kit::point(px(1.), px(1.));
                     // Keep the titlebar reachable.
-                    let x = corner.x.clamp(px(0.), (bounds.size.width - px(120.)).max(px(0.)));
-                    let y = corner.y.clamp(px(0.), (bounds.size.height - px(32.)).max(px(0.)));
+                    let x = corner
+                        .x
+                        .clamp(px(0.), (bounds.size.width - px(120.)).max(px(0.)));
+                    let y = corner
+                        .y
+                        .clamp(px(0.), (bounds.size.height - px(32.)).max(px(0.)));
                     this.import_window.position = Some(gpui_kit::point(x, y));
                     cx.notify();
                 },

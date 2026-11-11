@@ -1,7 +1,7 @@
 /target
 /dist/
 /build/
-pack-editor/src-tauri/binaries/
+pack-editor-gpui/binaries/
 reviews
 behaviour-design
 design

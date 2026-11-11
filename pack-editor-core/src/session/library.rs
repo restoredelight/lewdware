@@ -161,10 +161,8 @@ pub fn search_query(text: &str) -> String {
     let trimmed = text.trim();
     let url = trimmed.strip_prefix("file://");
     let windows_path = trimmed.as_bytes().get(1..3) == Some(b":\\".as_slice());
-    let is_path = url.is_some()
-        || trimmed.starts_with('/')
-        || trimmed.starts_with("~/")
-        || windows_path;
+    let is_path =
+        url.is_some() || trimmed.starts_with('/') || trimmed.starts_with("~/") || windows_path;
     if !is_path {
         return text;
     }
@@ -644,8 +642,14 @@ mod paste_tests {
 
     #[test]
     fn a_copied_file_searches_for_its_name() {
-        assert_eq!(search_query("/home/me/Pictures/photo 1.jpg\r"), "photo 1.jpg");
-        assert_eq!(search_query("file:///home/me/Pictures/photo%201.jpg"), "photo 1.jpg");
+        assert_eq!(
+            search_query("/home/me/Pictures/photo 1.jpg\r"),
+            "photo 1.jpg"
+        );
+        assert_eq!(
+            search_query("file:///home/me/Pictures/photo%201.jpg"),
+            "photo 1.jpg"
+        );
         assert_eq!(search_query("~/Pictures/photo.jpg"), "photo.jpg");
         assert_eq!(search_query(r"C:\Users\me\photo.jpg"), "photo.jpg");
         assert_eq!(search_query("file:///home/me/caf%C3%A9.png"), "café.png");

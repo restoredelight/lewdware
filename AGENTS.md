@@ -10,14 +10,17 @@ Behaviour is driven by **packs** (the media: images/videos/audio, `.lwpack`) and
 
 ## Layout
 
-A Cargo workspace of Rust crates plus two Tauri + Svelte desktop apps and an Astro
+A Cargo workspace of Rust crates, including two gpui desktop apps, plus an Astro
 docs site.
 
 | Path | What it is | README |
 | --- | --- | --- |
 | `lewdware/` | The engine — spawns/renders windows, plays media, runs the mode. Rust (`winit`, `wgpu`/`softbuffer`, ffmpeg). Never launched directly. | [link](lewdware/README.md) |
-| `config/` | The user-facing app: configure the engine, pick pack/mode, launch/stop, updates. Tauri + Svelte. | [link](config/README.md) |
-| `pack-editor/` | GUI for creating/editing packs; compresses media via the ffmpeg CLI. Tauri + Svelte. Distributed separately. | [link](pack-editor/README.md) |
+| `config-gpui/` | The user-facing app (package `lewdware-config`, binary `lewdware`): configure the engine, pick pack/mode, launch/stop, updates. gpui. | [link](config-gpui/README.md) |
+| `pack-editor-gpui/` | GUI for creating/editing packs (package/binary `lewdware-pack-editor`); compresses media via the ffmpeg CLI. gpui. Distributed separately. | [link](pack-editor-gpui/README.md) |
+| `pack-editor-core/` | The pack editor's model: editing sessions, undo, import pipelines. No UI. | [link](pack-editor-core/README.md) |
+| `shared-gpui/` | Design tokens, fonts and components shared by the two gpui apps. | — |
+| `media-gpui/` | The pack editor's media previews (ffmpeg decode, gpui images). | [link](media-gpui/README.md) |
 | `lw/` | CLI for creating/editing/building modes. | [link](lw/README.md) |
 | `supervisor/` | Background daemon owning session lifecycle, scheduling, tray, stop shortcut, wallpaper. Config talks to it; it spawns the engine. | [link](supervisor/README.md) |
 | `shared/` | Library crate shared by all of the above: pack reading, `behaviour.json`, the Lua API (`lua/api.lua`), config, IPC, scheduling, wallpaper. | [link](shared/README.md) |
@@ -25,7 +28,7 @@ docs site.
 | `docs/` | The website (<https://lewdware.net>), Astro + Starlight. Hosts the Lua API reference and version manifests. | [link](docs/README.md) |
 | `default-modes/` | The modes bundled with Lewdware by default. | — |
 | `dev-modes/` | Modes used to exercise the engine during development; not shipped. | [link](dev-modes/README.md) |
-| `shared-ui/` | Shared Svelte components + design tokens for `config/` and `pack-editor/`. | see below |
+| `shared-ui/` | Just `DESIGN.md`, the UI style guide for both gpui apps. | see below |
 | `deploy/` | Bundling/distribution scripts (driven by `.github/workflows/build.yml`). | — |
 
 ## How it fits together
@@ -39,12 +42,13 @@ types and logic through the **shared** crate.
 
 - **Rust:** one Cargo workspace (`Cargo.toml` at the root). Build/run crates with
   `cargo run -p <crate>` (e.g. `cargo run -p lewdware`, `cargo run -p lw -- <cmd>`).
-- **JS/Svelte:** use **pnpm**, not npm. Run the Tauri apps with `pnpm tauri dev`
-  from `config/` or `pack-editor/`; the docs site with `pnpm dev` from `docs/`.
-- First-time setup (ffmpeg sidecars, building the default modes) is in the root
+- Run the apps with `cargo run -p lewdware-config` and `cargo run -p lewdware-pack-editor`.
+  On Linux they need the xkbcommon-x11 dev headers.
+- **JS:** use **pnpm**, not npm. Run the docs site with `pnpm dev` from `docs/`.
+- First-time setup (FFmpeg libraries and avifenc, building the default modes) is in the root
   README's "Getting started".
 
 ## Conventions
 
-- **Doing UI work in `config/` or `pack-editor/`?** Read
+- **Doing UI work in `config-gpui/` or `pack-editor-gpui/`?** Read
   [`shared-ui/DESIGN.md`](shared-ui/DESIGN.md) first.

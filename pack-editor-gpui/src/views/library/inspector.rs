@@ -11,8 +11,8 @@
 //! the uploaded image.
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     div, px, AnyElement, ClipboardItem, Context, Entity, EventEmitter, Focusable, FontWeight,

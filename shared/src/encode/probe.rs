@@ -1,11 +1,12 @@
+#[cfg(feature = "encode")]
 use std::path::Path;
 
+#[cfg(feature = "encode")]
 use anyhow::Result;
 
 use crate::attribution::ExtractedAttribution;
 
 use super::info::FileInfo;
-use super::paths::{get_ffprobe_path, new_command};
 
 /// A classified file, together with the container stream indices the classification was drawn
 /// from.
@@ -33,31 +34,137 @@ pub struct Streams {
     pub audio: Option<u64>,
 }
 
+/// Probes a file into the same shape `ffprobe -count_frames -show_entries ... -of json` gave,
+/// which is what `parse_media_info` (and its frozen fixtures in `tests.rs`) read.
+///
+/// `nb_read_frames` differs in one respect: ffprobe decoded every stream to count its frames,
+/// while this counts packets, and decodes only a video stream of at most one packet. For every
+/// video codec worth importing a packet is a frame, so the counts agree -- except where a single
+/// packet holds a whole animation (an animated WebP is read as one), which is exactly the case the
+/// decode catches. That saves a full decode of every video just to learn it has more than one
+/// frame.
+///
+/// A file ffmpeg can't open at all is `Ok(None)`, as a failed ffprobe was.
+#[cfg(feature = "encode")]
 pub fn file_info(path: &Path) -> Result<Option<(ProbedMedia, serde_json::Value)>> {
-    let args = [
-        "-v",
-        "error",
-        "-count_frames",
-        "-show_entries",
-        "stream=index,codec_name,codec_type,nb_read_frames,nb_frames,width,height,coded_width,\
-         coded_height,duration,r_frame_rate:stream_disposition=attached_pic:format=duration\
-         :format_tags",
-        "-output_format",
-        "json",
-    ];
+    use super::av;
+    use ffmpeg_next::{format, media};
+    use serde_json::{Map, Value, json};
 
-    let output = new_command(get_ffprobe_path())
-        .args(args)
-        .arg(path)
-        .output()?;
+    let mut input = match av::open_input(path) {
+        Ok(input) => input,
+        Err(error) => {
+            tracing::debug!("{error:#}");
+            return Ok(None);
+        }
+    };
 
-    if !output.status.success() {
-        tracing::error!("{}", String::from_utf8_lossy(&output.stderr));
-        return Ok(None);
+    let stream_count = input.streams().count();
+    let mut packets = vec![0u64; stream_count];
+    let mut first_packets: Vec<Option<ffmpeg_next::Packet>> = vec![None; stream_count];
+    while let Some(packet) = av::read_packet(&mut input) {
+        let index = packet.stream();
+        if index < stream_count {
+            packets[index] += 1;
+            if first_packets[index].is_none() {
+                first_packets[index] = Some(packet);
+            }
+        }
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let ratio = |r: ffmpeg_next::Rational| format!("{}/{}", r.numerator(), r.denominator());
+    let seconds = |ts: i64, tb: ffmpeg_next::Rational| {
+        (ts != ffmpeg_next::ffi::AV_NOPTS_VALUE).then(|| (ts as f64 * f64::from(tb)).to_string())
+    };
+
+    let mut streams = Vec::new();
+    for stream in input.streams() {
+        let index = stream.index();
+        let parameters = stream.parameters();
+        let kind = match parameters.medium() {
+            media::Type::Video => "video",
+            media::Type::Audio => "audio",
+            media::Type::Subtitle => "subtitle",
+            media::Type::Data => "data",
+            media::Type::Attachment => "attachment",
+            _ => "unknown",
+        };
+        let mut entry = Map::new();
+        entry.insert("index".into(), json!(index));
+        entry.insert("codec_type".into(), json!(kind));
+        entry.insert("codec_name".into(), json!(parameters.id().name()));
+        entry.insert("r_frame_rate".into(), json!(ratio(stream.rate())));
+        if let Some(duration) = seconds(stream.duration(), stream.time_base()) {
+            entry.insert("duration".into(), json!(duration));
+        }
+        if stream.frames() > 0 {
+            entry.insert("nb_frames".into(), json!(stream.frames().to_string()));
+        }
+        let attached = stream
+            .disposition()
+            .contains(format::stream::Disposition::ATTACHED_PIC);
+        entry.insert(
+            "disposition".into(),
+            json!({ "attached_pic": u8::from(attached) }),
+        );
+
+        if kind == "video" {
+            let (width, height) = unsafe {
+                let raw = parameters.as_ptr();
+                ((*raw).width, (*raw).height)
+            };
+            entry.insert("width".into(), json!(width));
+            entry.insert("height".into(), json!(height));
+            let frames = match (packets[index], first_packets[index].take()) {
+                (1, Some(packet)) => count_frames(&stream, &packet),
+                (count, _) => count,
+            };
+            entry.insert("nb_read_frames".into(), json!(frames.to_string()));
+        }
+        streams.push(Value::Object(entry));
+    }
+
+    let mut format = Map::new();
+    if let Some(duration) = seconds(
+        input.duration(),
+        ffmpeg_next::Rational::new(1, ffmpeg_next::ffi::AV_TIME_BASE),
+    ) {
+        format.insert("duration".into(), json!(duration));
+    }
+    let tags: Map<String, Value> = input
+        .metadata()
+        .iter()
+        .map(|(key, value)| (key.to_owned(), json!(value)))
+        .collect();
+    if !tags.is_empty() {
+        format.insert("tags".into(), Value::Object(tags));
+    }
+
+    let json = json!({ "streams": streams, "format": format });
     Ok(parse_media_info(&json).map(|probed| (probed, json)))
+}
+
+/// Frames decoded from a stream's only packet: one for a still, many for an animation packed
+/// into a single packet, none for a stream this build can't decode.
+#[cfg(feature = "encode")]
+fn count_frames(stream: &ffmpeg_next::format::stream::Stream, packet: &ffmpeg_next::Packet) -> u64 {
+    use super::av::{self, Pull};
+
+    let Ok(mut decoder) = av::video_decoder(stream) else {
+        return 0;
+    };
+    let mut frame = ffmpeg_next::frame::Video::empty();
+    let mut frames = 0;
+    av::send_packet(&mut decoder, packet);
+    let _ = decoder.send_eof();
+    for _ in 0..av::MAX_SKIPPED {
+        match av::receive_frame(&mut decoder, &mut frame) {
+            Ok(Pull::Ready) => frames += 1,
+            Ok(Pull::Skipped) => continue,
+            Ok(Pull::Pending | Pull::Done) | Err(_) => break,
+        }
+    }
+    frames
 }
 
 /// Best-effort artist/source-url extraction from a video/audio container's own metadata tags
@@ -83,6 +190,7 @@ pub fn extract_container_attribution(json: &serde_json::Value) -> ExtractedAttri
     out
 }
 
+#[cfg(feature = "encode")]
 pub fn probe_file(path: &Path) -> Result<Option<(ProbedMedia, serde_json::Value)>> {
     file_info(path)
 }
@@ -161,7 +269,7 @@ fn media_duration(json: &serde_json::Value, stream: Option<&serde_json::Value>) 
 const VIDEO_WIDTH: [&str; 2] = ["width", "coded_width"];
 const VIDEO_HEIGHT: [&str; 2] = ["height", "coded_height"];
 
-/// A stream ffprobe couldn't decode is still reported, just with every dimension zeroed. Zero is
+/// A stream ffmpeg couldn't decode is still reported, just with every dimension zeroed. Zero is
 /// never a real dimension, so refusing it here is what keeps such files out rather than admitting
 /// them as 0x0 media that only fails later, during the encode.
 ///

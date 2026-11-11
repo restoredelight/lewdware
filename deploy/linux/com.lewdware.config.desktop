@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Lewdware
+Comment=Configure and launch Lewdware
+Exec=lewdware
+Icon=lewdware
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=com.lewdware.config

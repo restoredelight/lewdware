@@ -335,17 +335,21 @@ impl MediaSlotView {
 
     fn open_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search files..."));
-        let _events = cx.subscribe_in(&search, window, |_, input, event: &InputEvent, window, cx| {
-            if matches!(event, InputEvent::Change) {
-                crate::views::library::tags::clean_search_field(
-                    input,
-                    pack_editor_core::session::library::search_query,
-                    window,
-                    cx,
-                );
-                cx.notify();
-            }
-        });
+        let _events = cx.subscribe_in(
+            &search,
+            window,
+            |_, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    crate::views::library::tags::clean_search_field(
+                        input,
+                        pack_editor_core::session::library::search_query,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                }
+            },
+        );
         search.update(cx, |search, cx| search.focus(window, cx));
         self.picker = Some(Picker { search, _events });
         cx.notify();
@@ -581,9 +585,9 @@ impl Render for MediaSlotView {
                                 gpui_kit::component::tooltip::Tooltip::new("View").build(window, cx)
                             })
                             .child(picture)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.view(id, window, cx)
-                            })),
+                            .on_click(
+                                cx.listener(move |this, _, window, cx| this.view(id, window, cx)),
+                            ),
                     )
                     .child(
                         div()

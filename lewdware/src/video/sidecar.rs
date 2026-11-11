@@ -13,13 +13,13 @@ use super::*;
 use crate::media::MediaSource;
 use std::path::{Path, PathBuf};
 
-/// Where the sidecars live. `download_ffmpeg_sidecars.sh` stages them under `pack-editor`
+/// Where the sidecars live. `download_ffmpeg_sidecars.sh` stages them under `pack-editor-gpui`
 /// relative to the repo root; `LEWDWARE_SIDECAR_DIR` overrides for other layouts.
 fn binaries_dir() -> PathBuf {
     std::env::var_os("LEWDWARE_SIDECAR_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../pack-editor/src-tauri/binaries")
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../pack-editor-gpui/binaries")
         })
 }
 

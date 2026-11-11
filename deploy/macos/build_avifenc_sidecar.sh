@@ -8,7 +8,7 @@ set -e
 
 LIBAVIF_TAG="v1.4.2"
 
-BINARIES_DIR="pack-editor/src-tauri/binaries"
+BINARIES_DIR="pack-editor-gpui/binaries"
 mkdir -p "$BINARIES_DIR"
 
 AVIFENC_SIDECAR="$BINARIES_DIR/lewdware-avifenc"
