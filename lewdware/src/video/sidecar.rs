@@ -1,43 +1,26 @@
-//! Decode-level coverage against real files, built at test time with the sidecar ffmpeg.
+//! Decode-level coverage against real files, built at test time with the `ffmpeg` on `PATH`.
 //!
 //! `mod pacing` drives `next_frame` against a hand-fed channel, which deliberately involves no
 //! ffmpeg at all — so nothing there exercises `decode_video`, and the bug these cover (the tail of
 //! every pass being discarded rather than drained) was invisible to it. It only shows up against
 //! a stream that actually holds frames back, which means real B-frames and a real decoder.
 //!
-//! `#[ignore]`d so the default `cargo test` needs no binaries, matching `shared::encode`'s own
-//! sidecar module. To run:
-//! `./deploy/linux/download_ffmpeg_sidecars.sh && cargo test -p lewdware --bin lewdware-engine sidecar -- --ignored`
+//! `#[ignore]`d so the default `cargo test` needs no programs, matching `shared::encode`'s own
+//! integration module. They need `ffmpeg` and `ffprobe` on `PATH`, built with libx264 (any distro
+//! build is; it's only for making the test clips). To run:
+//! `cargo test -p lewdware --bin lewdware-engine sidecar -- --ignored`
 #[cfg(test)]
 use super::*;
 use crate::media::MediaSource;
 use std::path::{Path, PathBuf};
 
-/// Where the sidecars live. `download_ffmpeg_sidecars.sh` stages them under `pack-editor-gpui`
-/// relative to the repo root; `LEWDWARE_SIDECAR_DIR` overrides for other layouts.
-fn binaries_dir() -> PathBuf {
-    std::env::var_os("LEWDWARE_SIDECAR_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../pack-editor-gpui/binaries")
-        })
-}
-
 fn ffmpeg(dir: &Path, args: &[&str]) {
-    let ffmpeg = binaries_dir().join("lewdware-ffmpeg");
-    assert!(
-        ffmpeg.is_file(),
-        "no ffmpeg sidecar at {} -- run deploy/linux/download_ffmpeg_sidecars.sh from the \
-         repo root, or set LEWDWARE_SIDECAR_DIR",
-        binaries_dir().display()
-    );
-
-    let output = std::process::Command::new(ffmpeg)
+    let output = std::process::Command::new("ffmpeg")
         .current_dir(dir)
         .args(["-y", "-loglevel", "error"])
         .args(args)
         .output()
-        .expect("run sidecar ffmpeg");
+        .expect("an ffmpeg program on PATH to build the test clips");
 
     assert!(
         output.status.success(),
@@ -48,13 +31,13 @@ fn ffmpeg(dir: &Path, args: &[&str]) {
 
 /// One `-show_entries` value, as ffprobe printed it.
 fn probe(path: &Path, entries: &str) -> String {
-    let output = std::process::Command::new(binaries_dir().join("lewdware-ffprobe"))
+    let output = std::process::Command::new("ffprobe")
         .args(["-v", "error", "-select_streams", "v:0"])
         .args(["-show_entries", entries])
         .args(["-of", "default=nw=1:nk=1"])
         .arg(path)
         .output()
-        .expect("run sidecar ffprobe");
+        .expect("an ffprobe program on PATH");
 
     assert!(
         output.status.success(),

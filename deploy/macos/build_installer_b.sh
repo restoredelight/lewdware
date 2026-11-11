@@ -11,10 +11,8 @@ APP_NAME="Lewdware Pack Editor"
 BUILD_DIR="build/pack-editor-stage"
 APP_DIR="$BUILD_DIR/dmg/$APP_NAME.app"
 
-# 1. Stage FFmpeg and ffprobe if not already present
-"$(dirname "$0")/download_ffmpeg_sidecars.sh"
-
-# 1b. Build the avifenc sidecar if not already present
+# 1. Build the avifenc sidecar if not already present. Images are the one thing still encoded by
+# a separate program; video, audio and probing go through the linked FFmpeg.
 "$(dirname "$0")/build_avifenc_sidecar.sh"
 
 # Static, LGPL-only FFmpeg with SVT-AV1, Opus, dav1d and libwebp (deploy/build_ffmpeg.sh; a no-op
@@ -25,7 +23,7 @@ APP_DIR="$BUILD_DIR/dmg/$APP_NAME.app"
 export PKG_CONFIG_PATH="$PWD/build/ffmpeg-static/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
 # 2. Build the editor, linking that FFmpeg (it previews and encodes with it) rather than Homebrew's
-# GPL build. The sidecars above are separate GPL executables; see THIRD_PARTY_LICENSES.md.
+# GPL build. See pack-editor-gpui/THIRD_PARTY_LICENSES.md.
 echo "Building the pack editor..."
 cargo build -p lewdware-pack-editor --release --features static-ffmpeg
 
@@ -36,19 +34,18 @@ mkdir -p "$BUILD_DIR/dmg"
 make_app_bundle "$APP_DIR" "target/release/lewdware-pack-editor" \
   lewdware-pack-editor "$APP_NAME" "com.lewdware.pack-editor" "$VERSION"
 
-# The editor looks for its sidecars in Contents/Resources/binaries (pack-editor-gpui/src/main.rs,
-# `sidecar_dirs`).
+# The editor looks for the avifenc sidecar in Contents/Resources/binaries
+# (pack-editor-gpui/src/main.rs, `sidecar_dirs`).
 RESOURCES="$APP_DIR/Contents/Resources"
+AVIFENC="$RESOURCES/binaries/lewdware-avifenc"
 mkdir -p "$RESOURCES/binaries"
-for bin in lewdware-ffmpeg lewdware-ffprobe lewdware-avifenc; do
-  cp "pack-editor-gpui/binaries/$bin" "$RESOURCES/binaries/$bin"
-  chmod 755 "$RESOURCES/binaries/$bin"
-  # Apple Silicon won't run unsigned code. Keep a sidecar's own signature if it has one.
-  codesign -v "$RESOURCES/binaries/$bin" 2>/dev/null || codesign --force --sign - "$RESOURCES/binaries/$bin"
-done
+cp "pack-editor-gpui/binaries/lewdware-avifenc" "$AVIFENC"
+chmod 755 "$AVIFENC"
+# Apple Silicon won't run unsigned code. Keep the sidecar's own signature if it has one.
+codesign -v "$AVIFENC" 2>/dev/null || codesign --force --sign - "$AVIFENC"
 cp "LICENSE" "$RESOURCES/LICENSE"
 cp "pack-editor-gpui/THIRD_PARTY_LICENSES.md" "$RESOURCES/THIRD_PARTY_LICENSES.md"
-cp "pack-editor-gpui/COPYING.GPLv3" "$RESOURCES/COPYING.GPLv3"
+cp "pack-editor-gpui/COPYING.LGPLv2.1" "$RESOURCES/COPYING.LGPLv2.1"
 
 # FFmpeg and its codec libraries, dav1d included, are static (static-ffmpeg).
 echo "Resolving dynamic library dependencies..."

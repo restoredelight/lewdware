@@ -47,5 +47,9 @@ winreg = "0.56"
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
 
+# Killing the encode worker's whole process group (`encode::worker`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11rb = { version = "0.13", features = ["randr"] }

@@ -25,8 +25,8 @@ Never enable zbus's `tokio` feature anywhere in the workspace; see `config-gpui/
 | `../media-gpui/` | Reusable media preview entity, image lifetime management and background decoding. |
 | `scripts/ui-check.sh` | Runs the app headless and drives it. `--seed N` creates a draft with N synthetic files. |
 | `build.rs` | Embeds the Windows icon. |
-| `binaries/` | The avifenc sidecar, built by `deploy/*/build_avifenc_sidecar.*`. Not committed. (The ffmpeg/ffprobe sidecars `download_ffmpeg_sidecars.*` still stages here are no longer used: video and audio encode through the linked libraries, in a `--encode-worker` child process.) |
-| `THIRD_PARTY_LICENSES.md`, `COPYING.GPLv3` | Licences for the bundled sidecars and the linked FFmpeg; the installers ship both. |
+| `binaries/` | The avifenc sidecar, built by `deploy/*/build_avifenc_sidecar.*`. Not committed. Video and audio encode through the linked FFmpeg, in a `--encode-worker` child process; no ffmpeg programs ship. |
+| `THIRD_PARTY_LICENSES.md`, `COPYING.LGPLv2.1` | Licences for the linked FFmpeg and its codec libraries and for the avifenc sidecar; the installers ship both. |
 
 Design tokens, fonts, shared components and the tokio runtime come from `shared-gpui/`.
 

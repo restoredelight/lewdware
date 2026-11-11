@@ -30,7 +30,7 @@ finish-args:
   # `nvidia-vaapi-driver` subdirectories, plus `.../GL/lib/dri`, which is where Flatpak aggregates
   # whichever GL extensions the host actually resolved. Setting the variable would *replace* that
   # path with a snapshot of one runtime's layout, so it would break on exactly the hosts it was
-  # meant to help. The ffmpeg sidecar uses it for hardware encoding.
+  # meant to help. The linked FFmpeg uses it for hardware encoding.
   #
   # No network: the editor makes no requests.
   #

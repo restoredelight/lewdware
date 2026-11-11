@@ -27,7 +27,8 @@ LicenseFile=..\..\LICENSE
 CloseApplications=yes
 RestartApplications=no
 
-; FFmpeg is linked statically now. Clear out the DLLs earlier versions installed beside the exe.
+; FFmpeg is linked statically now, and the editor runs no ffmpeg programs. Clear out what earlier
+; versions installed for them.
 [InstallDelete]
 Type: files; Name: "{app}\avcodec-*.dll"
 Type: files; Name: "{app}\avformat-*.dll"
@@ -37,18 +38,19 @@ Type: files; Name: "{app}\avdevice-*.dll"
 Type: files; Name: "{app}\swscale-*.dll"
 Type: files; Name: "{app}\swresample-*.dll"
 Type: files; Name: "{app}\dav1d.dll"
+Type: files; Name: "{app}\binaries\lewdware-ffmpeg.exe"
+Type: files; Name: "{app}\binaries\lewdware-ffprobe.exe"
+Type: files; Name: "{app}\COPYING.GPLv3.txt"
 
 [Files]
 Source: "..\..\target\release\lewdware-pack-editor.exe"; DestDir: "{app}"; Flags: ignoreversion
-; ffmpeg, ffprobe and avifenc sidecars. The editor looks for them in binaries\ beside itself
+; The avifenc sidecar. The editor looks for it in binaries\ beside itself
 ; (pack-editor-gpui/src/main.rs, `sidecar_dirs`).
-Source: "..\..\pack-editor-gpui\binaries\lewdware-ffmpeg.exe"; DestDir: "{app}\binaries"; Flags: ignoreversion
-Source: "..\..\pack-editor-gpui\binaries\lewdware-ffprobe.exe"; DestDir: "{app}\binaries"; Flags: ignoreversion
 Source: "..\..\pack-editor-gpui\binaries\lewdware-avifenc.exe"; DestDir: "{app}\binaries"; Flags: ignoreversion
-; Licences: MIT for the editor, and the GPLv3 that covers the ffmpeg sidecars
+; Licences: MIT for the editor, and the LGPL v2.1 that covers the FFmpeg linked into it
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\..\pack-editor-gpui\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\pack-editor-gpui\COPYING.GPLv3"; DestDir: "{app}"; DestName: "COPYING.GPLv3.txt"; Flags: ignoreversion
+Source: "..\..\pack-editor-gpui\COPYING.LGPLv2.1"; DestDir: "{app}"; DestName: "COPYING.LGPLv2.1.txt"; Flags: ignoreversion
 ; Visual C++ Redistributable (extracted to temp and deleted after install)
 Source: "..\..\build\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 

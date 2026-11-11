@@ -8,9 +8,8 @@ the MIT License (see the repository root [`LICENSE`](../LICENSE)).
 The engine (`lewdware/`) links against FFmpeg's libraries (`libavcodec`,
 `libavformat`, etc.) through the `ffmpeg-next` crate to decode video/audio
 from packs. Linking against FFmpeg makes the resulting binary a combined work
-governed by whatever license that copy of FFmpeg carries - this is a
-different (stronger) form of combination than pack-editor's use of FFmpeg as
-a subprocess (see `pack-editor/THIRD_PARTY_LICENSES.md`).
+governed by whatever license that copy of FFmpeg carries. The pack editor
+links the same build (see `pack-editor-gpui/THIRD_PARTY_LICENSES.md`).
 
 **Official release builds** (produced by `.github/workflows/build.yml`) link
 FFmpeg statically with the `static-ffmpeg` cargo feature, against a build that

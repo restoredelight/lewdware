@@ -33,14 +33,30 @@ pub struct EncodedFile {
 /// `Ok(None)` means `input` isn't media this build can read.
 ///
 /// Runs in the encode worker process when one is set up (`use_encode_worker`), so a decoder that
-/// crashes or hangs on a hostile file takes down the worker, not the app.
+/// crashes on a hostile file takes down the worker, not the app, and one that hangs is killed
+/// once it stops making progress.
 pub fn encode_file(
     input: &Path,
     output: &Path,
     encoder: HardwareEncoder,
 ) -> Result<Option<EncodedFile>> {
+    encode_file_cancellable(input, output, encoder, &|| false)
+}
+
+/// `encode_file`, stopped early once `cancelled` returns true: the worker is killed and whatever
+/// it had written of the output removed, and the encode fails. `cancelled` is polled from the
+/// calling thread a few times a second, so it should be cheap -- a channel's `is_closed`, say.
+///
+/// Without a worker the encode can't be interrupted; `cancelled` is only checked before it starts.
+pub fn encode_file_cancellable(
+    input: &Path,
+    output: &Path,
+    encoder: HardwareEncoder,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<EncodedFile>> {
     match worker::configured() {
-        Some(exe) => worker::encode(exe, input, output, &encoder),
+        Some(exe) => worker::encode(exe, input, output, &encoder, cancelled),
+        None if cancelled() => bail!("the encode was cancelled"),
         None => encode_file_in_process(input, output, encoder),
     }
 }
@@ -587,6 +603,7 @@ impl Muxer {
 
     /// Writes a packet whose timestamps are in `time_base`, the encoder's.
     fn write(&mut self, mut packet: Packet, time_base: Rational) -> Result<()> {
+        worker::tick();
         if !self.started {
             self.queued.push((packet, time_base));
             return Ok(());

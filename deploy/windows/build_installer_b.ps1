@@ -14,13 +14,11 @@ function Check-LastExitCode {
 
 $VERSION = (Select-String -Path "Cargo.toml" -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
 
-# 1. Stage FFmpeg & ffprobe if not already present
-& "$PSScriptRoot\download_ffmpeg_sidecars.ps1"
-
-# 1b. Stage the avifenc sidecar if not already present
+# 1. Stage the avifenc sidecar if not already present. Images are the one thing still encoded by a
+# separate program; video, audio and probing go through the linked FFmpeg.
 & "$PSScriptRoot\download_avifenc_sidecar.ps1"
 
-# 1c. The Visual C++ Redistributable. build_installer_a.ps1 caches the same file; fetch it here
+# 1b. The Visual C++ Redistributable. build_installer_a.ps1 caches the same file; fetch it here
 # only when this runs on its own.
 $vcRedist = "build\vc_redist.x64.exe"
 if (-not (Test-Path $vcRedist)) {

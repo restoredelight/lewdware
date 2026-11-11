@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context};
 use futures::{stream, StreamExt};
 use infer::MatcherType;
 use serde::Serialize;
-use shared::encode::{encode_file, hash_file, HardwareEncoder};
+use shared::encode::{encode_file_cancellable, hash_file, HardwareEncoder};
 use tempfile::TempDir;
 use tokio::sync::{oneshot, watch, RwLock, Semaphore};
 use uuid::Uuid;
@@ -74,8 +74,9 @@ pub async fn wait_cancelled(cancel: &mut watch::Receiver<bool>) {
 }
 
 /// Wraps a handle to work running outside this future (a rayon encode, a blocking extract).
-/// If the wrapping future is dropped before the work lands — the import was cancelled — the
-/// work itself can't be interrupted, so await it in a detached task and delete its output file.
+/// If the wrapping future is dropped before the work lands — the import was cancelled — await
+/// the work in a detached task and delete its output file. An encode notices its receiver has
+/// gone and stops its worker (`encode_file_cancellable`); other work runs to the end.
 pub struct DiscardOnDrop<F: Future + Send + Unpin + 'static>
 where
     F::Output: Send,
@@ -474,8 +475,11 @@ async fn process_one_file_outcome(
 
     let (tx, rx) = oneshot::channel();
     let encode_output = output_path.clone();
+    // Cancelling drops `rx` (DiscardOnDrop), which stops the encode's worker.
     rayon::spawn(move || {
-        let _ = tx.send(encode_file(&path_owned, &encode_output, encoder));
+        let result =
+            encode_file_cancellable(&path_owned, &encode_output, encoder, &|| tx.is_closed());
+        let _ = tx.send(result);
     });
 
     let encoded = DiscardOnDrop::new(rx, output_path, staging.clone())

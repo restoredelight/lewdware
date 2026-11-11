@@ -97,6 +97,7 @@ cmake_install() { # dir [cmake args...]
     -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
     "$@"
   cmake --build "$dir/build" --parallel "$JOBS"
   cmake --install "$dir/build"
@@ -123,7 +124,10 @@ cmake_install libwebp \
 
 echo "== SVT-AV1 $SVTAV1_VERSION"
 fetch https://gitlab.com/AOMediaCodec/SVT-AV1.git "$SVTAV1_VERSION" svtav1
-cmake_install svtav1 -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DBUILD_TESTING=OFF
+# No LTO, which SVT-AV1 turns on by default: rustc copies these archives into an rlib, and the
+# archive index it writes can't see into LTO objects. Where the compiler emits LTO-only objects
+# (Ubuntu's arm64 gcc), the final link then finds none of SVT-AV1's symbols.
+cmake_install svtav1 -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DBUILD_TESTING=OFF -DSVT_AV1_LTO=OFF
 
 platform_flags=()
 if [[ "$OS" == Linux ]]; then

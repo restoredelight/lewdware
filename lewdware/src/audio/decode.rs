@@ -577,29 +577,13 @@ mod sidecar {
     use rodio::Source;
     use std::path::{Path, PathBuf};
 
-    fn binaries_dir() -> PathBuf {
-        std::env::var_os("LEWDWARE_SIDECAR_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../pack-editor-gpui/binaries")
-            })
-    }
-
     fn ffmpeg(dir: &Path, args: &[&str]) {
-        let ffmpeg = binaries_dir().join("lewdware-ffmpeg");
-        assert!(
-            ffmpeg.is_file(),
-            "no ffmpeg sidecar at {} -- run deploy/linux/download_ffmpeg_sidecars.sh from the \
-             repo root, or set LEWDWARE_SIDECAR_DIR",
-            binaries_dir().display()
-        );
-
-        let output = std::process::Command::new(ffmpeg)
+        let output = std::process::Command::new("ffmpeg")
             .current_dir(dir)
             .args(["-y", "-loglevel", "error"])
             .args(args)
             .output()
-            .expect("run sidecar ffmpeg");
+            .expect("an ffmpeg program on PATH to build the test clips");
 
         assert!(
             output.status.success(),

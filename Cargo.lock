@@ -9035,6 +9035,7 @@ dependencies = [
  "interprocess",
  "itertools 0.15.0",
  "json5",
+ "libc",
  "mlua",
  "nom-exif",
  "rusqlite",

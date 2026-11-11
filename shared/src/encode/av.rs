@@ -103,6 +103,7 @@ pub(super) fn create_output(path: &Path, container: &str) -> Result<format::cont
 /// A read error other than end-of-file also ends the input rather than failing it, as the CLI
 /// did: a truncated download still yields everything up to the damage.
 pub(super) fn read_packet(input: &mut format::context::Input) -> Option<Packet> {
+    super::worker::tick();
     let mut packet = Packet::empty();
     match packet.read(input) {
         Ok(()) => Some(packet),

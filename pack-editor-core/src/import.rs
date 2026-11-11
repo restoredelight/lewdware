@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Context};
 use converter::{convert, ConversionOutput, ConvertedMedia, ZipSource};
 use futures::{stream, StreamExt};
 use shared::behaviour::MediaSlot;
-use shared::encode::{encode_file, hash_file, HardwareEncoder};
+use shared::encode::{encode_file_cancellable, hash_file, HardwareEncoder};
 use tempfile::TempDir;
 use tokio::sync::{oneshot, watch, RwLock};
 use uuid::Uuid;
@@ -271,7 +271,9 @@ async fn import_one_media(
     let (tx, rx) = oneshot::channel();
     let encode_output = output_path.clone();
     rayon::spawn(move || {
-        let result = encode_file(&encode_input, &encode_output, encoder);
+        // Cancelling drops `rx` (DiscardOnDrop), which stops the encode's worker.
+        let result =
+            encode_file_cancellable(&encode_input, &encode_output, encoder, &|| tx.is_closed());
         let _ = std::fs::remove_file(&encode_input);
         let _ = tx.send(result);
     });
