@@ -386,9 +386,10 @@ impl SafetyPage {
                                 ),
                         )
                         .child(
-                            "In System Settings, turn on Lewdware under Privacy & Security, \
-                             Input Monitoring. The shortcut starts working as soon as it's on; \
-                             there's no need to restart Lewdware.",
+                            "In System Settings, under Privacy & Security, Input Monitoring, \
+                             turn on Lewdware. If it isn't listed, add it with +. The shortcut \
+                             starts working as soon as it's on; there's no need to restart \
+                             Lewdware.",
                         ),
                 )
             })

@@ -4,6 +4,7 @@
 mod backend;
 mod keys;
 mod pages;
+mod probe;
 mod shell;
 mod single_instance;
 mod store;
@@ -18,6 +19,10 @@ pub const APP_ID: &str = "com.lewdware.config";
 /// Runs the app. Its executable (`src/main.rs` in development, a launcher loading the shared core
 /// in releases; see `core/`) does nothing else.
 pub fn run() {
+    // A headless stand-in for testing, before anything else: see `probe.rs`.
+    if let Some(code) = probe::run_if_requested() {
+        std::process::exit(code);
+    }
     let _log_guard = shared::logging::init("config").expect("Couldn't start logs");
 
     let mut show_requests = match runtime::block_on(single_instance::claim()) {
