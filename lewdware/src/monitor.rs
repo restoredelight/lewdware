@@ -105,6 +105,14 @@ pub fn list_monitors() -> anyhow::Result<()> {
         builder.with_x11();
     }
 
+    // macOS: no Dock icon or menu bar of its own (its executable is inside Lewdware.app, which
+    // would otherwise give it both). A probe runs for a moment; a Dock icon would flash.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        builder.with_activation_policy(ActivationPolicy::Accessory);
+    }
+
     builder.build()?.run_app(&mut Probe)?;
 
     Ok(())

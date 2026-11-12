@@ -57,7 +57,17 @@ fn run_non_linux(config: AppConfig) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let (control_tx, control_rx) = mpsc::channel::<ControlMessage>(64);
 
-    let event_loop = EventLoopBuilder::<crate::tray::TrayView>::with_user_event().build();
+    #[allow(unused_mut)]
+    let mut event_loop = EventLoopBuilder::<crate::tray::TrayView>::with_user_event().build();
+    // macOS: a menu bar extra, not an app. Its executable is inside Lewdware.app, which would
+    // otherwise give it a Dock icon of its own, and starting it would take focus from whatever
+    // the user is doing.
+    #[cfg(target_os = "macos")]
+    {
+        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+        event_loop.set_activation_policy(ActivationPolicy::Accessory);
+        event_loop.set_activate_ignoring_other_apps(false);
+    }
     let proxy = event_loop.create_proxy();
 
     let tray_control_tx = control_tx.clone();

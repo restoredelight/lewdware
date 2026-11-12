@@ -20,3 +20,7 @@ pub mod utils;
 pub mod wallpaper;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// `Lewdware.app`'s bundle identifier (`deploy/macos/build_installer.sh`). The engine and the
+/// supervisor run from executables inside it, and send their notifications as it.
+pub const MACOS_BUNDLE_ID: &str = "com.lewdware";

@@ -74,6 +74,14 @@ enum Probe {
 pub fn run() -> Result<u8> {
     let cli = Cli::parse();
 
+    // macOS: send notifications as Lewdware.app. Otherwise mac-notification-sys looks the sender
+    // up with an AppleScript `id of application "use_default"`, which names no app, so AppleScript
+    // asks the user where it is: a dialog this process can't show, which blocks it forever,
+    // bouncing in the Dock. (An engine that failed to start hung there, its session stuck at
+    // "Starting".) Fails only if already set.
+    #[cfg(target_os = "macos")]
+    let _ = notify_rust::set_application(shared::MACOS_BUNDLE_ID);
+
     // Handled before anything else: a probe is a short-lived run, not a session. It must not touch
     // the log file, the temp dir or the fd limit of a real engine that may be running at the same
     // time.
@@ -150,6 +158,14 @@ pub fn run() -> Result<u8> {
         // Wayland doesn't support a bunch of stuff we need (e.g. setting the position of windows).
         // So we use XWayland instead.
         event_loop_builder.with_x11();
+    }
+
+    // macOS: no Dock icon or menu bar of its own (its executable is inside Lewdware.app, which
+    // would otherwise give it both). It still takes focus for prompts and text input.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        event_loop_builder.with_activation_policy(ActivationPolicy::Accessory);
     }
 
     let event_loop = event_loop_builder

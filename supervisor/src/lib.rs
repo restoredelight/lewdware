@@ -67,6 +67,14 @@ pub enum Command {
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // macOS: send notifications as Lewdware.app. Otherwise mac-notification-sys looks the sender
+    // up with an AppleScript `id of application "use_default"`, which names no app, so AppleScript
+    // asks the user where it is: a dialog this process can't show, which blocks it forever,
+    // bouncing in the Dock. (An engine that failed to start hung there, its session stuck at
+    // "Starting".) Fails only if already set.
+    #[cfg(target_os = "macos")]
+    let _ = notify_rust::set_application(shared::MACOS_BUNDLE_ID);
+
     match cli.command {
         None => daemon::run(),
         Some(Command::DiagnoseSchedule { path }) => diagnose_schedule(path),
