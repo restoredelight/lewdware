@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "converter",
+    "core",
+    "launcher",
     "lewdware",
     "lw",
     "pack-editor-core",

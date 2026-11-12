@@ -19,7 +19,6 @@ export default defineConfig({
 					label: "Download",
 					items: [
 						{ label: "Lewdware", slug: "download" },
-						{ label: "Pack Editor", slug: "download/pack-editor" },
 						{ label: "Packs", slug: "download/packs" },
 					],
 				},

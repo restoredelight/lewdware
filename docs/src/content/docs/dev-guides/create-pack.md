@@ -6,8 +6,8 @@ description: Learn how to create a pack using the pack editor
 Packs are just collections of images, videos and audio files. Creating and
 editing packs is easy using the pack editor tool.
 
-Begin by [downloading the pack editor for your OS](/download/pack-editor),
-and installing it.
+The pack editor is installed with Lewdware. If you don't have it yet, begin by
+[downloading Lewdware for your OS](/download/) and installing it.
 
 ## Create a pack
 

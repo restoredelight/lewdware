@@ -1,5 +1,10 @@
-# deploy/windows/build_installer_a.ps1
-# Windows Build & Packaging script for Lewdware Main Suite (Installer A)
+# deploy/windows/build_installer.ps1
+# Builds and packages Lewdware for Windows: one Inno Setup installer (installer.iss) with the
+# config app, the pack editor, the supervisor, the engine and the lw CLI.
+#
+# Every app but lw is in one DLL, lewdware_core.dll, which each app's small launcher exe loads
+# (core\, launcher\). Each launcher carries its own icon, and the two apps set their own
+# AppUserModelIDs, so they are separate apps to the taskbar and the Start menu.
 
 $ErrorActionPreference = "Stop"
 
@@ -53,6 +58,10 @@ function Check-LastExitCode {
     }
 }
 
+# The pack editor's image encoder, the one thing it still runs as a separate program. A no-op when
+# it is already staged.
+& "$PSScriptRoot\download_avifenc_sidecar.ps1"
+
 # 1. Compile all applications
 Write-Host "Compiling applications..."
 cargo build -p lw --release
@@ -66,18 +75,12 @@ foreach ($mode in @("sandbox", "experience")) {
     Pop-Location
 }
 
-# Links FFmpeg statically from vcpkg's x64-windows-static-md triplet (the workflow installs it, with
-# SVT-AV1, Opus, dav1d and libwebp), so there are no FFmpeg DLLs to ship.
-cargo build -p lewdware --release --features static-ffmpeg
-Check-LastExitCode
-
-cargo build -p lewdware-supervisor --release
-Check-LastExitCode
-
-# The config app (config-gpui\), whose binary is lewdware.exe. It embeds the default modes built
-# above, and its icon (build.rs).
-Write-Host "Building config app..."
-cargo build -p lewdware-config --release
+# The shared core, linking FFmpeg statically from vcpkg's x64-windows-static-md triplet (the
+# workflow installs it, with SVT-AV1, Opus, dav1d and libwebp), so there are no FFmpeg DLLs to
+# ship; and the launchers, built as launcher-<app>.exe (launcher\Cargo.toml) and renamed by
+# installer.iss. The config app, in the core, embeds the default modes built above.
+Write-Host "Building the shared core and the launchers..."
+cargo build -p lewdware-core -p lewdware-launcher --release --features lewdware-core/static-ffmpeg
 Check-LastExitCode
 
 # 2. Build the Installer using Inno Setup
@@ -92,6 +95,6 @@ if ($isccCmd) {
     exit 1
 }
 
-& $ISCC "/DAppVersion=$VERSION" deploy\windows\installer_a.iss
+& $ISCC "/DAppVersion=$VERSION" deploy\windows\installer.iss
 Check-LastExitCode
 Write-Host "SUCCESS: Installer created in dist/"

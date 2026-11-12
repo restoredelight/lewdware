@@ -1,6 +1,6 @@
 #!/bin/bash
 # deploy/macos/bundle.sh
-# Helpers for assembling .app bundles by hand, sourced by build_installer_{a,b}.sh. The gpui apps
+# Helpers for assembling .app bundles by hand, sourced by build_installer.sh. The gpui apps
 # have no bundler, so this writes what Tauri's used to: the Info.plist, the icon, and the
 # non-system dylibs under Contents/Frameworks.
 
@@ -43,22 +43,30 @@ PLIST
 #
 # Recursively copies every non-system dylib BINARY links into APP_DIR/Contents/Frameworks and
 # relinks it there. Handles transitive deps automatically.
+#
+# References go through @loader_path, relative to whichever file loads the library, not
+# @executable_path: the shared core in Lewdware.app's Frameworks is also loaded by the pack
+# editor's launcher, whose executable is in another bundle.
 bundle_dylibs() {
   local app="$1" target="$2"
   local frameworks="$app/Contents/Frameworks"
+  local from_target="@loader_path/../Frameworks"
+  [[ "$(dirname "$target")" == "$frameworks" ]] && from_target="@loader_path"
   while IFS= read -r dep; do
     case "$dep" in
       /usr/lib/* | /System/* | @* | "") continue ;;
     esac
     local lib_name
     lib_name=$(basename "$dep")
+    # A library's first line in otool -L is its own install name, not a dependency.
+    [[ "$lib_name" == "$(basename "$target")" ]] && continue
     local staged="$frameworks/$lib_name"
-    install_name_tool -change "$dep" "@executable_path/../Frameworks/$lib_name" "$target"
+    install_name_tool -change "$dep" "$from_target/$lib_name" "$target"
     if [ ! -f "$staged" ]; then
       echo "   Bundling $dep"
       cp "$dep" "$staged"
       chmod 755 "$staged"
-      install_name_tool -id "@executable_path/../Frameworks/$lib_name" "$staged"
+      install_name_tool -id "@loader_path/$lib_name" "$staged"
       bundle_dylibs "$app" "$staged"
     fi
   done < <(otool -L "$target" | tail -n +2 | awk '{print $1}')

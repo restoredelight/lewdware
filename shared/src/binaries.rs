@@ -3,8 +3,103 @@ use std::process::Command;
 
 use crate::utils::sanitize_child_env;
 
+/// The file name of the shared core library every app but `lw` is built into in releases
+/// (`core/`).
+#[cfg(windows)]
+const CORE: &str = "lewdware_core.dll";
+#[cfg(target_os = "macos")]
+const CORE: &str = "liblewdware_core.dylib";
+#[cfg(all(unix, not(target_os = "macos")))]
+const CORE: &str = "liblewdware_core.so";
+
+/// The directory the running code was loaded from: the shared core library's in a release, where
+/// each app's executable is a small launcher that loads it (`launcher/`), and otherwise this
+/// executable's. Use it, not `current_exe()`, for files that belong to the install rather than to
+/// one app: the pack editor's launcher on macOS is in a bundle of its own, away from the rest.
+///
+/// Where it is in each install:
+///
+/// - Windows: the install directory, beside every executable.
+/// - Linux: `/usr/lib/lewdware/` (or `lib/lewdware/` in the tarball), beside the engine and the
+///   supervisor; the config app and the pack editor are in `../../bin/`.
+/// - macOS: `Lewdware.app/Contents/Frameworks/`; the executables are in `../MacOS/`.
+pub fn core_dir() -> Option<PathBuf> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let core = loaded_from(core_dir as *const ())
+            .filter(|path| path.file_name().is_some_and(|name| name == CORE));
+        // Not built into the core: this is an app's own executable, in development. (dladdr
+        // names the main executable however it was started, possibly relatively, so it isn't
+        // asked for that.)
+        let path = match core {
+            Some(core) => core,
+            None => std::env::current_exe().ok()?,
+        };
+        Some(path.canonicalize().ok()?.parent()?.to_owned())
+    })
+    .clone()
+}
+
+/// The file of the module (executable or shared library) that `address` is in.
+#[cfg(unix)]
+fn loaded_from(address: *const ()) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    // Safety: dladdr only reads `address`, and fills `info` with pointers into the loader's own
+    // tables, which live as long as the module does; this one never unloads.
+    unsafe {
+        let mut info: libc::Dl_info = std::mem::zeroed();
+        if libc::dladdr(address.cast(), &mut info) == 0 || info.dli_fname.is_null() {
+            return None;
+        }
+        let name = std::ffi::CStr::from_ptr(info.dli_fname);
+        Some(PathBuf::from(std::ffi::OsStr::from_bytes(name.to_bytes())))
+    }
+}
+
+/// The file of the module (executable or DLL) that `address` is in.
+#[cfg(windows)]
+fn loaded_from(address: *const ()) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+
+    const FROM_ADDRESS: u32 = 0x4;
+    const UNCHANGED_REFCOUNT: u32 = 0x2;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleExW(flags: u32, name: *const u16, module: *mut *mut std::ffi::c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut std::ffi::c_void, name: *mut u16, size: u32) -> u32;
+    }
+
+    // Safety: with FROM_ADDRESS, `name` is read as an address inside a module, not a string, and
+    // the handle isn't reference-counted, so there is nothing to free. The buffer's length is
+    // passed with it.
+    unsafe {
+        let mut module = std::ptr::null_mut();
+        if GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, address.cast(), &mut module) == 0 {
+            return None;
+        }
+        let mut name = vec![0u16; 32 * 1024];
+        let len = GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize;
+        (len > 0 && len < name.len())
+            .then(|| PathBuf::from(std::ffi::OsString::from_wide(&name[..len])))
+    }
+}
+
 fn candidates_for(bin_name: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
+
+    // Releases: relative to the shared core (see `core_dir` for the layouts).
+    if let Some(dir) = core_dir() {
+        candidates.push(dir.join(bin_name));
+        #[cfg(target_os = "macos")]
+        if let Some(contents) = dir.parent() {
+            candidates.push(contents.join("MacOS").join(bin_name));
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(prefix) = dir.parent().and_then(|lib| lib.parent()) {
+            candidates.push(prefix.join("bin").join(bin_name));
+        }
+    }
 
     if let Ok(exe) = std::env::current_exe()
         && let Ok(dir) = exe.canonicalize()

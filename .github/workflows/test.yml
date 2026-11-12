@@ -117,6 +117,8 @@ jobs:
             libx11-dev \
             libxi-dev \
             libxtst-dev \
+            libxrandr-dev \
+            libxcursor-dev \
             libavcodec-dev \
             libavformat-dev \
             libavutil-dev \
@@ -136,7 +138,9 @@ jobs:
         run: cargo test -p lewdware-config -p lewdware-pack-editor -p pack-editor-core -p shared-gpui -p media-gpui -p lewdware-supervisor
 
       - name: Clippy
-        run: cargo clippy -p lewdware-config -p lewdware-pack-editor -p pack-editor-core -p shared-gpui -p media-gpui -p lewdware-supervisor --all-targets -- -D warnings
+        # Also the shared core every app is built into for releases, and the launchers that load it.
+        # The core links the engine too, hence libxrandr-dev and libxcursor-dev above.
+        run: cargo clippy -p lewdware-config -p lewdware-pack-editor -p pack-editor-core -p shared-gpui -p media-gpui -p lewdware-supervisor -p lewdware-core -p lewdware-launcher --all-targets -- -D warnings
 
   rust-engine:
     name: Engine Rust tests
@@ -192,7 +196,7 @@ jobs:
       # be reproduced without a decoder that actually holds frames back. The clips are made with
       # the `ffmpeg` program installed above.
       - name: Run decode tests against real clips
-        run: cargo test -p lewdware --bin lewdware-engine sidecar -- --ignored --nocapture
+        run: cargo test -p lewdware --lib sidecar -- --ignored --nocapture
 
       - name: Clippy
         run: cargo clippy -p lewdware --all-targets -- -D warnings

@@ -9,6 +9,8 @@ The pack editor probes, previews and encodes media through FFmpeg's
 libraries (`libavcodec`, `libavformat`, `libavfilter`, etc.), linked into
 the editor itself through the `ffmpeg-next` crate (see
 `../shared/src/encode/` and `../media-gpui/`). It runs no FFmpeg programs.
+In releases the editor is built into the shared library every Lewdware app
+but `lw` is in (`../core/`), with the FFmpeg linked into it.
 
 Release builds link FFmpeg statically, built from pristine upstream source
 *without* `--enable-gpl`, `--enable-version3` or `--enable-nonfree`, so the
@@ -47,9 +49,8 @@ MIT-licensed, for the hardware encoders.
 ## Bundled avifenc binary (BSD-2-Clause)
 
 Images are encoded to AVIF by a separate program, `avifenc`, which the
-installers ship as `lewdware-avifenc` in a `binaries/` directory beside the
-editor (see `src/main.rs`'s `sidecar_dirs`,
-`deploy/linux/build_avifenc_sidecar.sh`,
+installers ship as `lewdware-avifenc` in a `binaries/` directory (see
+`src/lib.rs`'s `sidecar_dirs`, `deploy/linux/build_avifenc_sidecar.sh`,
 `deploy/macos/build_avifenc_sidecar.sh` and
 `deploy/windows/download_avifenc_sidecar.ps1`).
 
@@ -74,6 +75,7 @@ royalty-free patent grant from the Alliance for Open Media.
   Alliance for Open Media.
 
 This file, [`COPYING.LGPLv2.1`](./COPYING.LGPLv2.1), and a copy of the root
-MIT `LICENSE` are installed with the editor by every installer, so they
-travel with the app for anyone who only has the compiled binary and not this
-repository.
+MIT `LICENSE` are installed by every installer (Linux: in
+`share/doc/lewdware/`, this one as `THIRD_PARTY_LICENSES-pack-editor.md`), so
+they travel with the app for anyone who only has the compiled binary and not
+this repository.

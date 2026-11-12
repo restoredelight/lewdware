@@ -1,0 +1,38 @@
+[package]
+name = "lewdware-launcher"
+version.workspace = true
+description = "The small per-app executables that load the shared core (core/)"
+authors = ["restoredelight"]
+edition = "2024"
+publish = false
+
+# One executable per app, each a few hundred KB, that finds the shared core library and runs its
+# own role in it. They are built under these names so they don't overwrite the apps' own
+# development executables in target/; the installers (deploy/) rename them:
+#
+#   launcher-config       ->  lewdware             (lewdware.exe)
+#   launcher-pack-editor  ->  lewdware-pack-editor
+#   launcher-engine       ->  lewdware-engine
+#   launcher-supervisor   ->  lewdware-supervisor
+#
+# Each is its own executable, not one copy under four names: on Windows each carries its own icon
+# and version resource (build.rs), and on macOS each app's bundle needs a main executable of its
+# own for the app to have its own identity (see spikes/dylib-launcher/README.md).
+
+[dependencies]
+libloading = "0.8.9"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.3"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSAlert",
+    "NSApplication",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"

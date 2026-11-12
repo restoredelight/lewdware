@@ -27,9 +27,11 @@ Lewdware is split into several crates:
   the tray icon and the stop shortcut.
 
 `deploy/` contains scripts for bundling and distributing the tools (done in
-`.github/workflows/build.yml`). The engine, supervisor, config app and `lw` are
-distributed together, while the pack editor is distributed separately (since
-it's quite a large application).
+`.github/workflows/build.yml`). Everything is distributed together, one installer
+per platform. In releases the engine, supervisor, config app and pack editor are
+built into one shared library (`core/`), which a small executable per app loads
+(`launcher/`), so their code is on disk once; the pack editor is still an app of
+its own. `lw` stays a separate program.
 
 `docs/` contains the code for the [website](https://lewdware.net), written in
 Astro and Starlight, and hosted on Cloudflare. The Lua mode API can be found

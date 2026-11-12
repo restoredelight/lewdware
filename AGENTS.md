@@ -17,12 +17,14 @@ docs site.
 | --- | --- | --- |
 | `lewdware/` | The engine — spawns/renders windows, plays media, runs the mode. Rust (`winit`, `wgpu`/`softbuffer`, ffmpeg). Never launched directly. | [link](lewdware/README.md) |
 | `config-gpui/` | The user-facing app (package `lewdware-config`, binary `lewdware`): configure the engine, pick pack/mode, launch/stop, updates. gpui. | [link](config-gpui/README.md) |
-| `pack-editor-gpui/` | GUI for creating/editing packs (package/binary `lewdware-pack-editor`); compresses media via the ffmpeg CLI. gpui. Distributed separately. | [link](pack-editor-gpui/README.md) |
+| `pack-editor-gpui/` | GUI for creating/editing packs (package/binary `lewdware-pack-editor`); encodes media with the linked ffmpeg. gpui. Its own app, shipped in the same installers. | [link](pack-editor-gpui/README.md) |
 | `pack-editor-core/` | The pack editor's model: editing sessions, undo, import pipelines. No UI. | [link](pack-editor-core/README.md) |
 | `shared-gpui/` | Design tokens, fonts and components shared by the two gpui apps. | — |
 | `media-gpui/` | The pack editor's media previews (ffmpeg decode, gpui images). | [link](media-gpui/README.md) |
 | `lw/` | CLI for creating/editing/building modes. | [link](lw/README.md) |
 | `supervisor/` | Background daemon owning session lifecycle, scheduling, tray, stop shortcut, wallpaper. Config talks to it; it spawns the engine. | [link](supervisor/README.md) |
+| `core/` | Release builds only: the engine, supervisor, config app and pack editor in one shared library (`lewdware_core`), so the code and the static ffmpeg are on disk once. | — |
+| `launcher/` | Release builds only: the small per-app executables that load `core/` and run their app in it. Installers rename `launcher-<app>` to the app's name. | — |
 | `shared/` | Library crate shared by all of the above: pack reading, `behaviour.json`, the Lua API (`lua/api.lua`), config, IPC, scheduling, wallpaper. | [link](shared/README.md) |
 | `converter/` | Converts Edgeware/Edgeware++ packs into `.lwpack` pieces. Used by the pack editor. | [link](converter/README.md) |
 | `docs/` | The website (<https://lewdware.net>), Astro + Starlight. Hosts the Lua API reference and version manifests. | [link](docs/README.md) |

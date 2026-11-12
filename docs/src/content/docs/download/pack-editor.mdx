@@ -1,57 +1,12 @@
 ---
 title: Download Pack Editor
-description: Download the Lewdware Pack Editor for your platform.
+description: The Lewdware Pack Editor comes with Lewdware.
 ---
-
-import DownloadSection from '../../../components/DownloadSection.astro';
-import latest from '../../../data/pack-editor-latest.json';
 
 The Lewdware Pack Editor is a graphical tool for creating and editing packs — import media, assign tags,
 embed modes, and export for distribution.
 
-:::note[Windows SmartScreen]
-On Windows, the installer is not code-signed. When prompted by SmartScreen, click **More info** →
-**Run anyway** to proceed.
-:::
+It is installed with Lewdware: [download Lewdware](/download/) for your platform, and the pack
+editor is there beside it, as its own app.
 
-:::note[macOS Gatekeeper]
-The installer is not notarized. macOS will block it on first open.
-
-After the first blocked attempt, open **System Settings → Privacy & Security**,
-scroll to the security section at the bottom, and click **Open Anyway** next to the blocked
-installer entry.
-:::
-
-<DownloadSection
-  windowsUrl={latest.assets['windows-x64']}
-  windowsExt="exe"
-  macosArm64Url={latest.assets['macos-arm64']}
-  macosX64Url={latest.assets['macos-x64']}
-  macosExt="dmg"
-  linuxFormats={[
-    {
-      label: '.deb',
-      desc: 'Debian, Ubuntu, and derivatives',
-      x64: latest.assets['linux-x64-deb'],
-      arm64: latest.assets['linux-arm64-deb'],
-    },
-    {
-      label: '.rpm',
-      desc: 'Fedora, RHEL, openSUSE, and derivatives',
-      x64: latest.assets['linux-x64-rpm'],
-      arm64: latest.assets['linux-arm64-rpm'],
-    },
-    {
-      label: '.flatpak',
-      desc: 'Any distribution — brings its own dependencies',
-      x64: latest.assets['linux-x64-flatpak'],
-      arm64: latest.assets['linux-arm64-flatpak'],
-    },
-    {
-      label: '.tar.gz',
-      desc: 'Any distribution — needs a Vulkan driver',
-      x64: latest.assets['linux-x64-tar'],
-      arm64: latest.assets['linux-arm64-tar'],
-    },
-  ]}
-/>
+If you installed the pack editor on its own before, installing Lewdware replaces it.

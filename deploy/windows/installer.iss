@@ -1,5 +1,10 @@
-; installer_a.iss
-; Inno Setup Script for Lewdware Main Suite (Installer A)
+; installer.iss
+; Inno Setup Script for Lewdware: the config app, the pack editor, the supervisor, the engine and
+; the lw CLI.
+;
+; Every app but lw is in lewdware_core.dll; each .exe below but lw.exe is a small launcher that
+; loads it (core\, launcher\). The launchers are built as launcher-<app>.exe and installed under
+; their apps' names.
 
 [Setup]
 AppName=Lewdware
@@ -26,14 +31,16 @@ UninstallDisplayName=Lewdware
 ArchitecturesAllowed=x64compatible
 LicenseFile=..\..\LICENSE
 ; StopLewdware (see [Code]) shuts everything down in PrepareToInstall, which runs *before* this
-; check - so it normally finds nothing. Left enabled as a backstop for anything not covered
-; there, e.g. a stray lw.exe running out of {app}.
+; check - so it normally finds nothing. Left enabled for what StopLewdware deliberately leaves
+; running: the pack editor, which may have unsaved work (the Restart Manager asks before closing
+; it), and a stray lw.exe running out of {app}.
 CloseApplications=yes
 ; ...but don't let the Restart Manager relaunch the supervisor behind the user's back once the
 ; install finishes. Starting a session is the user's call.
 RestartApplications=no
 
 ; FFmpeg is linked statically now. Clear out the DLLs earlier versions installed beside the exe.
+; (The pack editor's old separate install, which had its own, is uninstalled in PrepareToInstall.)
 [InstallDelete]
 Type: files; Name: "{app}\avcodec-*.dll"
 Type: files; Name: "{app}\avformat-*.dll"
@@ -45,22 +52,38 @@ Type: files; Name: "{app}\swresample-*.dll"
 Type: files; Name: "{app}\dav1d.dll"
 
 [Files]
-; MIT license - shown during install above, and kept alongside the binaries
+; Licences. MIT's own terms require its notice to accompany copies of the software (it is also
+; shown during install, above); the LGPL requires its text to accompany the FFmpeg statically
+; linked into the core; the OFL requires the same of the fonts the apps embed.
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
-; Config GUI (user-facing entry point)
-Source: "..\..\target\release\lewdware.exe"; DestDir: "{app}"; DestName: "lewdware.exe"; Flags: ignoreversion
-; Engine (internal, launched by config app)
-Source: "..\..\target\release\lewdware-engine.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\lewdware\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\pack-editor-gpui\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; DestName: "THIRD_PARTY_LICENSES-pack-editor.md"; Flags: ignoreversion
+Source: "..\..\pack-editor-gpui\COPYING.LGPLv2.1"; DestDir: "{app}"; DestName: "COPYING.LGPLv2.1.txt"; Flags: ignoreversion
+Source: "..\..\assets\fonts\licenses\*"; DestDir: "{app}\fonts"; Flags: ignoreversion
+; The shared core: every app but lw
+Source: "..\..\target\release\lewdware_core.dll"; DestDir: "{app}"; Flags: ignoreversion
+; The config app (user-facing entry point)
+Source: "..\..\target\release\launcher-config.exe"; DestDir: "{app}"; DestName: "lewdware.exe"; Flags: ignoreversion
+; The pack editor, and its image encoder, which it looks for in binaries\ beside the core
+; (pack-editor-gpui/src/lib.rs, `sidecar_dirs`)
+Source: "..\..\target\release\launcher-pack-editor.exe"; DestDir: "{app}"; DestName: "lewdware-pack-editor.exe"; Flags: ignoreversion
+Source: "..\..\pack-editor-gpui\binaries\lewdware-avifenc.exe"; DestDir: "{app}\binaries"; Flags: ignoreversion
+; Engine (internal, launched by the supervisor)
+Source: "..\..\target\release\launcher-engine.exe"; DestDir: "{app}"; DestName: "lewdware-engine.exe"; Flags: ignoreversion
 ; Supervisor (internal, owns session lifecycle and scheduling)
-Source: "..\..\target\release\lewdware-supervisor.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\target\release\launcher-supervisor.exe"; DestDir: "{app}"; DestName: "lewdware-supervisor.exe"; Flags: ignoreversion
 ; CLI
 Source: "..\..\target\release\lw.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Visual C++ Redistributable (extracted to temp and deleted after install)
 Source: "..\..\build\win-stage\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
+; Each with the AppUserModelID its app sets on itself (launcher/src/bin/), so a pinned shortcut and
+; the running app share one taskbar button.
 [Icons]
-Name: "{group}\Lewdware"; Filename: "{app}\lewdware.exe"
-Name: "{userdesktop}\Lewdware"; Filename: "{app}\lewdware.exe"; Tasks: desktopicon
+Name: "{group}\Lewdware"; Filename: "{app}\lewdware.exe"; AppUserModelID: "com.lewdware.config"
+Name: "{group}\Lewdware Pack Editor"; Filename: "{app}\lewdware-pack-editor.exe"; AppUserModelID: "com.lewdware.pack-editor"
+Name: "{userdesktop}\Lewdware"; Filename: "{app}\lewdware.exe"; AppUserModelID: "com.lewdware.config"; Tasks: desktopicon
+Name: "{userdesktop}\Lewdware Pack Editor"; Filename: "{app}\lewdware-pack-editor.exe"; AppUserModelID: "com.lewdware.pack-editor"; Tasks: desktopicon
 
 [Run]
 Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Visual C++ Redistributable..."
@@ -119,9 +142,28 @@ begin
   Sleep(500);
 end;
 
+// The pack editor used to have an installer of its own, into {localappdata}\Programs\Lewdware
+// Pack Editor. It is part of this install now, so remove that one, quietly, rather than leave two
+// copies and two Start menu entries. Its uninstaller closes a running editor first, through the
+// Restart Manager, as its installer did.
+procedure UninstallOldPackEditor();
+var
+  Key: String;
+  Uninstaller: String;
+  ResultCode: Integer;
+begin
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Lewdware Pack Editor_is1';
+  if RegQueryStringValue(HKEY_CURRENT_USER, Key, 'UninstallString', Uninstaller) then
+  begin
+    Exec(RemoveQuotes(Uninstaller), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   StopLewdware();
+  UninstallOldPackEditor();
   Result := '';
 end;
 

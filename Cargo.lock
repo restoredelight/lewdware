@@ -5333,6 +5333,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "lewdware-core"
+version = "0.0.2"
+dependencies = [
+ "anyhow",
+ "lewdware",
+ "lewdware-config",
+ "lewdware-pack-editor",
+ "lewdware-supervisor",
+]
+
+[[package]]
+name = "lewdware-launcher"
+version = "0.0.2"
+dependencies = [
+ "embed-resource",
+ "libloading 0.8.9",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "lewdware-pack-editor"
 version = "0.0.2"
 dependencies = [

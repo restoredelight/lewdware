@@ -1,0 +1,27 @@
+[package]
+name = "lewdware-core"
+version.workspace = true
+description = "The engine, supervisor, config app and pack editor in one shared library, which each app's launcher loads"
+authors = ["restoredelight"]
+edition = "2024"
+publish = false
+
+# Releases ship this one library (liblewdware_core.so, liblewdware_core.dylib, lewdware_core.dll)
+# and a small launcher per app (`launcher/`), so the four apps, and the FFmpeg statically linked
+# into them, are on disk once. Development builds don't need it: each app still has its own
+# executable (`cargo run -p lewdware-config` and so on).
+[lib]
+name = "lewdware_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+lewdware = { path = "../lewdware" }
+lewdware-config = { path = "../config-gpui" }
+lewdware-pack-editor = { path = "../pack-editor-gpui" }
+lewdware-supervisor = { path = "../supervisor" }
+
+[features]
+# Release builds: FFmpeg linked statically into the engine and the pack editor. See
+# lewdware/THIRD_PARTY_LICENSES.md.
+static-ffmpeg = ["lewdware/static-ffmpeg", "lewdware-pack-editor/static-ffmpeg"]

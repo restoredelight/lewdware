@@ -105,28 +105,31 @@ bounded file handles from the model, including saved archives, rather than start
 
 1. ~~Rename the package and binary to `lewdware-pack-editor`~~ (the Tauri app's binary name, so
    the desktop entry and anything scripted against it keep working). Done.
-2. ~~Find the sidecars where the installers put them.~~ Done: `main.rs`'s `sidecar_dirs` looks in
-   `binaries/` beside the executable (Windows), `../Resources/binaries` (macOS) and
-   `../lib/lewdware-pack-editor/binaries` (Linux), and debug builds in this crate's `binaries/`.
+2. ~~Find the sidecars where the installers put them.~~ Done: `lib.rs`'s `sidecar_dirs` looks in
+   `binaries/` beside the shared core (Windows: the install directory; Linux:
+   `lib/lewdware/binaries`), in `../Resources/binaries` from the executable (macOS), and debug
+   builds in this crate's `binaries/`.
 3. ~~Link an LGPL FFmpeg in release builds.~~ Done: the installers build with
    `--features static-ffmpeg` against an LGPL-only FFmpeg with SVT-AV1, Opus, dav1d and libwebp
    (`deploy/build_ffmpeg.sh` on Linux and macOS, vcpkg's static triplet on Windows), as the
    engine does. The Tauri editor linked no FFmpeg at all.
-4. ~~Point `deploy/` at the new binary.~~ Done. The installers now stage everything Tauri's
-   bundler did: `deploy/linux/build_installer_b.sh` builds the `.deb`, `.rpm` and tarball from
-   one relocatable tree, with `com.lewdware.pack-editor.desktop` and icons named after the app
-   id; the Flatpak repacks that `.deb` on the plain freedesktop runtime (no WebKit to carry, and
-   no network permission: the editor makes no requests); `deploy/macos/build_installer_b.sh`
-   assembles the `.app` and `.dmg`; Windows switched from Tauri's `.msi` to an Inno Setup `.exe`
-   (`installer_b.iss`), like the main suite's.
+4. ~~Point `deploy/` at the new binary.~~ Done, and since then the editor ships in the main
+   installers rather than its own. In releases its code is in the shared core (`core/`), and its
+   executable is a launcher that loads it (`launcher/`). Linux: the `.deb`, `.rpm` and tarball
+   (`deploy/linux/build_installer.sh`) install `bin/lewdware-pack-editor`, with
+   `com.lewdware.pack-editor.desktop` and icons named after the app id, and replace the old
+   `lewdware-pack-editor` package; the Flatpak is gone. macOS: the `.pkg`
+   (`deploy/macos/build_installer.sh`) installs `Lewdware Pack Editor.app` beside
+   `Lewdware.app`, whose core it loads; the `.dmg` is gone. Windows: `installer.iss` installs
+   `lewdware-pack-editor.exe` with its own icon, Start menu entry and AppUserModelID, and
+   uninstalls the old separate install.
 5. ~~Delete `pack-editor/` and the parts of `shared-ui/` only it used.~~ Done.
 6. Port what's missing and work through the caveats below. Beyond "Not ported yet", the Tauri
    editor also had an **update check** (`commands/update.rs`, against
    `docs/src/data/pack-editor-latest.json`) that this one doesn't.
-7. Build each installer once and install it. Only the Linux `.deb`, `.rpm` and tarball have
-   been built so far. Two upgrade questions to check on Windows: the old `.msi` install isn't
-   removed by the new installer, so both show in Apps until the user uninstalls the old one; and
-   whether the vcpkg FFmpeg DLLs need any further DLLs beside the eight the script copies.
+7. Build each installer once and install it. One upgrade question to check on Windows: the old
+   Tauri `.msi` install isn't removed by the new installer (only the Inno Setup one is), so both
+   show in Apps until the user uninstalls the old one.
 
 ## Known caveats
 
