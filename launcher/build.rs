@@ -12,22 +12,41 @@ mod windows {
     /// Executable, the name it is installed under, and what Explorer calls it.
     const LAUNCHERS: [(&str, &str, &str); 4] = [
         ("launcher-config", "lewdware.exe", "Lewdware"),
-        ("launcher-pack-editor", "lewdware-pack-editor.exe", "Lewdware Pack Editor"),
+        (
+            "launcher-pack-editor",
+            "lewdware-pack-editor.exe",
+            "Lewdware Pack Editor",
+        ),
         ("launcher-engine", "lewdware-engine.exe", "Lewdware engine"),
-        ("launcher-supervisor", "lewdware-supervisor.exe", "Lewdware supervisor"),
+        (
+            "launcher-supervisor",
+            "lewdware-supervisor.exe",
+            "Lewdware supervisor",
+        ),
     ];
 
     pub fn embed_resources() {
         let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/icons/icon.ico");
-        let icon = icon.canonicalize().expect("assets/icons/icon.ico is missing");
+        let icon =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/icons/icon.ico");
+        let icon = icon
+            .canonicalize()
+            .expect("assets/icons/icon.ico is missing");
         let version = env!("CARGO_PKG_VERSION");
-        let numeric = version.split('.').chain(["0"; 4]).take(4).collect::<Vec<_>>().join(",");
+        let numeric = version
+            .split('.')
+            .chain(["0"; 4])
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(",");
 
         for (bin, file_name, description) in LAUNCHERS {
             let rc = out.join(format!("{bin}.rc"));
-            std::fs::write(&rc, resource_script(&icon, &numeric, version, file_name, description))
-                .unwrap();
+            std::fs::write(
+                &rc,
+                resource_script(&icon, &numeric, version, file_name, description),
+            )
+            .unwrap();
             embed_resource::compile_for(&rc, [bin], embed_resource::NONE)
                 .manifest_optional()
                 .unwrap_or_else(|err| panic!("couldn't embed {bin}'s resources: {err}"));

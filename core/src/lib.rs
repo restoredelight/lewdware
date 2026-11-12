@@ -18,7 +18,9 @@ use std::ffi::{CStr, c_char, c_int};
 /// the GUI apps' event loops require the main thread.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lewdware_main(role: *const c_char) -> c_int {
-    let role = unsafe { CStr::from_ptr(role) }.to_string_lossy().into_owned();
+    let role = unsafe { CStr::from_ptr(role) }
+        .to_string_lossy()
+        .into_owned();
     // A panic must not unwind into the launcher, which isn't Rust built with this library's
     // compiler. The panic hook has already reported it.
     std::panic::catch_unwind(|| run(&role)).unwrap_or(101)

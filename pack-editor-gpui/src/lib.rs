@@ -18,10 +18,11 @@ use gpui_kit::{
 /// Runs the app. Its executable (`src/main.rs` in development, a launcher loading the shared core
 /// in releases; see `core/`) does nothing else.
 pub fn run() {
-    // Before anything else: as an encode worker this process does one encode and exits.
+    // First, because encode workers need it too: an image's encode runs avifenc.
+    use_bundled_binaries();
+    // Then, before anything else: as an encode worker this process does one encode and exits.
     shared::encode::serve_encode_worker_if_requested();
     let _log_guard = shared::logging::init("pack-editor").expect("Couldn't start logs");
-    use_bundled_binaries();
     editor::detect_encoder();
 
     gpui_kit::application()

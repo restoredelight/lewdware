@@ -64,6 +64,12 @@ opt-level = 3
 [profile.dev.package.fast_image_resize]
 opt-level = 3
 
+[profile.release]
+# Drop the symbol table from release binaries (about 40 MB off the shared library). Exported
+# symbols the launchers load stay: they live in the dynamic symbol table, which this keeps.
+strip = true
+
 [profile.profiling]
 inherits = "release"
 debug = true
+strip = false

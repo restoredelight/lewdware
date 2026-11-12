@@ -66,7 +66,11 @@ fn loaded_from(address: *const ()) -> Option<PathBuf> {
     const UNCHANGED_REFCOUNT: u32 = 0x2;
     #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn GetModuleHandleExW(flags: u32, name: *const u16, module: *mut *mut std::ffi::c_void) -> i32;
+        fn GetModuleHandleExW(
+            flags: u32,
+            name: *const u16,
+            module: *mut *mut std::ffi::c_void,
+        ) -> i32;
         fn GetModuleFileNameW(module: *mut std::ffi::c_void, name: *mut u16, size: u32) -> u32;
     }
 
@@ -75,7 +79,12 @@ fn loaded_from(address: *const ()) -> Option<PathBuf> {
     // passed with it.
     unsafe {
         let mut module = std::ptr::null_mut();
-        if GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, address.cast(), &mut module) == 0 {
+        if GetModuleHandleExW(
+            FROM_ADDRESS | UNCHANGED_REFCOUNT,
+            address.cast(),
+            &mut module,
+        ) == 0
+        {
             return None;
         }
         let mut name = vec![0u16; 32 * 1024];

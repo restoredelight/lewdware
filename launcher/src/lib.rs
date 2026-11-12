@@ -45,10 +45,13 @@ pub fn launch(app: App) -> ! {
 
     let exe = std::env::current_exe().and_then(|exe| exe.canonicalize());
     let Some(core) = exe.as_deref().ok().and_then(find_core) else {
-        fail(&app, &format!(
-            "{} couldn't find {CORE}, the library that holds Lewdware's code. Reinstall Lewdware to fix this.",
-            app.name
-        ));
+        fail(
+            &app,
+            &format!(
+                "{} couldn't find {CORE}, the library that holds Lewdware's code. Reinstall Lewdware to fix this.",
+                app.name
+            ),
+        );
     };
 
     type Main = unsafe extern "C" fn(*const c_char) -> c_int;
@@ -58,11 +61,17 @@ pub fn launch(app: App) -> ! {
     let code = unsafe {
         let library = match libloading::Library::new(&core) {
             Ok(library) => library,
-            Err(err) => fail(&app, &format!("{} couldn't load {}: {err}", app.name, core.display())),
+            Err(err) => fail(
+                &app,
+                &format!("{} couldn't load {}: {err}", app.name, core.display()),
+            ),
         };
         let main: libloading::Symbol<Main> = match library.get(b"lewdware_main\0") {
             Ok(main) => main,
-            Err(err) => fail(&app, &format!("{} is not Lewdware's core: {err}", core.display())),
+            Err(err) => fail(
+                &app,
+                &format!("{} is not Lewdware's core: {err}", core.display()),
+            ),
         };
         let code = main(role.as_ptr());
         // Never unloaded: threads it started, and on macOS the Objective-C classes it registered,
@@ -88,7 +97,12 @@ fn find_core(exe: &Path) -> Option<PathBuf> {
         if let Some(contents) = dir.parent() {
             candidates.push(contents.join("Frameworks").join(CORE));
             if let Some(folder) = contents.parent().and_then(Path::parent) {
-                candidates.push(folder.join(macos::MAIN_APP).join(macos::FRAMEWORKS).join(CORE));
+                candidates.push(
+                    folder
+                        .join(macos::MAIN_APP)
+                        .join(macos::FRAMEWORKS)
+                        .join(CORE),
+                );
             }
         }
         if let Some(app) = macos::main_app_from_launch_services() {
@@ -162,7 +176,12 @@ mod windows {
 
     #[link(name = "user32")]
     unsafe extern "system" {
-        fn MessageBoxW(owner: *mut core::ffi::c_void, text: *const u16, caption: *const u16, kind: u32) -> i32;
+        fn MessageBoxW(
+            owner: *mut core::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            kind: u32,
+        ) -> i32;
     }
 
     /// Before any window exists, which is when it has to be set.
@@ -177,6 +196,13 @@ mod windows {
         const MB_ICONERROR: u32 = 0x10;
         let (title, message) = (wide(title), wide(message));
         // Safety: valid NUL-terminated strings and no owner window.
-        unsafe { MessageBoxW(std::ptr::null_mut(), message.as_ptr(), title.as_ptr(), MB_ICONERROR) };
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_ICONERROR,
+            )
+        };
     }
 }
