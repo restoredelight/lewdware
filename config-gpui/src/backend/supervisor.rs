@@ -72,8 +72,13 @@ pub async fn stop() {
 
 /// Follows the supervisor's status stream for the life of the app, sending `None` whenever no
 /// supervisor is reachable. Retries quietly every 2s: connecting to a local socket is cheap.
+///
+/// Keeps one running while the app is open, starting it if it's not (or has gone): the app shows
+/// what it reports, like whether the stop shortcut works, and while subscribed it doesn't exit
+/// idle. A failed start leaves the status `None`, as before.
 pub async fn follow(updates: mpsc::UnboundedSender<Option<StatusInfo>>) {
     loop {
+        let _ = control::ensure_supervisor_running().await;
         if let Ok(mut subscription) = control::subscribe().await {
             while let Ok(info) = subscription.next().await {
                 if updates.send(Some(info)).is_err() {

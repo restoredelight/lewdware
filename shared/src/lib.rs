@@ -5,6 +5,7 @@ pub mod behaviour;
 pub mod binaries;
 pub mod db;
 pub mod encode;
+pub mod input_monitoring;
 #[cfg(feature = "ipc")]
 pub mod ipc;
 pub mod logging;

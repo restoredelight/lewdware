@@ -63,12 +63,6 @@ pub async fn test_audio(device: Option<String>) -> anyhow::Result<TestAudioResul
         .map_err(|e| anyhow::anyhow!("could not read the engine's test sound result: {e}"))
 }
 
-/// Whether the stop shortcut can be heard. Only macOS gates global key listening (Input
-/// Monitoring); the prompt for it is not ported yet, so this reports granted everywhere.
-pub fn input_monitoring_granted() -> bool {
-    true
-}
-
 /// Lists the monitors, primary first. Asked of the engine because this process and the engine
 /// disagree about monitor names and geometry (the engine forces XWayland; see `shared::monitor`),
 /// and an id measured here would be saved into `disabled_monitors` and then never match. No

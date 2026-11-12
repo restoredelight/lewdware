@@ -100,6 +100,50 @@ impl StopShortcut {
     }
 }
 
+/// Reports that the shortcut needs Input Monitoring, then waits for the user to grant it and
+/// tells the control loop, which restarts the supervisor to apply it. Never returns: the restart
+/// replaces this process.
+///
+/// A process's answer never changes once it has asked, in either direction, and nor does what its
+/// listener hears: macOS applies a grant from the next launch. So each check is a new process
+/// (`lewdware-supervisor check-input-monitoring`). As our child, it runs as the same app.
+#[cfg(target_os = "macos")]
+fn wait_for_input_monitoring(control_tx: &mpsc::Sender<ControlMessage>) -> ! {
+    tracing::warn!("Stop shortcut waiting for Input Monitoring permission");
+    let _ = control_tx.blocking_send(ControlMessage::StopShortcutChanged(
+        StopShortcutStatus::PermissionRequired {
+            message: "Needs Input Monitoring permission".into(),
+        },
+    ));
+    while !granted_to_a_new_process() {
+        thread::sleep(std::time::Duration::from_secs(2));
+    }
+    tracing::info!("Input Monitoring permission granted");
+    let _ = control_tx.blocking_send(ControlMessage::InputMonitoringGranted);
+    loop {
+        thread::park();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn granted_to_a_new_process() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut check = std::process::Command::new(exe);
+    // Run as Lewdware.app's main executable: keep it in the supervisor role.
+    if std::env::args().nth(1).as_deref() == Some(shared::binaries::SUPERVISOR_ROLE_FLAG) {
+        check.arg(shared::binaries::SUPERVISOR_ROLE_FLAG);
+    }
+    check
+        .arg("check-input-monitoring")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 /// Spawn a thread that listens for the stop shortcut being pressed, sending
 /// [ControlMessage::StopKeyPressed] on match. Moved here wholesale from the engine (which used
 /// to own this thread directly) -- the supervisor is now the sole owner of the shortcut, alive
@@ -128,6 +172,14 @@ fn spawn_native_thread(control_tx: mpsc::Sender<ControlMessage>, mut target: wat
 
         loop {
             target.borrow_and_update();
+
+            // macOS: without Input Monitoring the listener below never hears a key, yet would
+            // report `Listening`. Say what's missing instead, so the config app can ask for it.
+            #[cfg(target_os = "macos")]
+            if !shared::input_monitoring::granted() {
+                wait_for_input_monitoring(&control_tx);
+            }
+
             let _ = control_tx.blocking_send(ControlMessage::StopShortcutChanged(
                 StopShortcutStatus::Listening {
                     backend: if cfg!(target_os = "linux") {

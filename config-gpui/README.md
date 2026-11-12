@@ -118,8 +118,10 @@ Things that are knowingly wrong or missing, to fix before this replaces `config/
   but it can't be changed from here until the desktop forgets its binding. Checked by build and
   unit tests only: the headless check has no supervisor, so the desktop-managed view hasn't been
   seen on screen. GNOME's gsettings path and X11/Windows/macOS still use the recorded key.
-- **macOS Input Monitoring prompt not ported.** `backend::hardware::input_monitoring_granted`
-  always reports granted, so the warning banner and "Open Settings" flow never show.
+- **macOS Input Monitoring warning not seen on screen.** The supervisor reports
+  `PermissionRequired` and the Safety page shows the warning and "Open settings" from it. The
+  supervisor side, the macOS prompt and the settings link were tested on the macOS VM, but the
+  page itself needs Metal, so it hasn't been looked at.
 - **A pack that fails to load at startup is only logged.** The page then shows the configured
   path with no metadata and no explanation. The Tauri app behaves the same. (All three `.lwpack`
   files in the repo root currently fail with `UnsupportedVersion`.)
@@ -180,4 +182,4 @@ for platform/build scope, evidence, and the initial Windows probe timeout that p
 
 Not yet: the gpui app on macOS or a real Wayland session. None of the new installers has been
 built on macOS or Windows (including the hand-written `.app`), nor has the tray's "Open Lewdware"
-been tried against an installed build. The macOS Input Monitoring check remains a stub.
+been tried against an installed build.

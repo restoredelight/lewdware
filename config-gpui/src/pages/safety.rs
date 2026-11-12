@@ -7,7 +7,7 @@ use gpui_kit::{
 };
 use shared::user_config::{Permissions, WallpaperRestore};
 
-use crate::backend::{hardware, wallpaper};
+use crate::backend::wallpaper;
 use crate::keys::key_from_keystroke;
 use crate::runtime;
 use crate::store::{FeedbackKind, Store};
@@ -106,6 +106,25 @@ impl SafetyPage {
             recorder,
             picking: false,
             _blur: blur,
+        }
+    }
+
+    /// macOS shows its own prompt the first time it's asked, and adds Lewdware to the Input
+    /// Monitoring list. After that it only answers, so open the list for the user to switch it on.
+    /// Either way the supervisor notices the grant by itself (`supervisor/src/stop_key.rs`).
+    fn ask_for_input_monitoring(&mut self, cx: &mut Context<Self>) {
+        if shared::input_monitoring::request() {
+            return;
+        }
+        if let Err(error) = shared::input_monitoring::open_settings() {
+            self.store.update(cx, |store, cx| {
+                store.set_feedback(
+                    "input-monitoring",
+                    FeedbackKind::Error,
+                    format!("Couldn't open System Settings: {error}"),
+                );
+                cx.notify();
+            });
         }
     }
 
@@ -274,9 +293,11 @@ impl SafetyPage {
                 backend, trigger, ..
             }) => format!("Registered via {backend}: {trigger}"),
             Some(Shortcut::Listening { backend }) => format!("Listening via {backend}"),
-            Some(Shortcut::SetupRequired { message, .. } | Shortcut::Failed { message }) => {
-                message.clone()
-            }
+            Some(
+                Shortcut::SetupRequired { message, .. }
+                | Shortcut::PermissionRequired { message }
+                | Shortcut::Failed { message },
+            ) => message.clone(),
             Some(Shortcut::Checking) => "Checking desktop shortcut...".into(),
             None => "Supervisor is idle. Check the shortcut to verify desktop setup.".into(),
         };
@@ -288,6 +309,7 @@ impl SafetyPage {
             })
         );
         let can_retry = matches!(shortcut, None | Some(Shortcut::Failed { .. }));
+        let needs_permission = matches!(shortcut, Some(Shortcut::PermissionRequired { .. }));
         let can_setup = matches!(
             shortcut,
             Some(Shortcut::SetupRequired {
@@ -334,9 +356,12 @@ impl SafetyPage {
                     ),
                 )
             })
-            .when(!hardware::input_monitoring_granted(), |this| {
+            .when(needs_permission, |this| {
                 this.child(
                     div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
                         .px_3()
                         .py_2()
                         .rounded(theme::RADIUS_MD)
@@ -345,7 +370,26 @@ impl SafetyPage {
                         .bg(c(theme::WARNING_BG))
                         .text_color(c(theme::WARNING))
                         .text_size(px(13.))
-                        .child("The stop shortcut requires Input Monitoring permission."),
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child("The stop shortcut needs Input Monitoring permission.")
+                                .child(div().flex_1())
+                                .child(
+                                    Button::new("input-monitoring", "Open settings")
+                                        .size(Size::Compact)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.ask_for_input_monitoring(cx)
+                                        })),
+                                ),
+                        )
+                        .child(
+                            "In System Settings, turn on Lewdware under Privacy & Security, \
+                             Input Monitoring. The shortcut starts working as soon as it's on; \
+                             there's no need to restart Lewdware.",
+                        ),
                 )
             })
             .child(

@@ -29,6 +29,10 @@ mod wallpaper;
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+    /// How Lewdware.app's main executable is told to run the supervisor
+    /// (`shared::binaries::SUPERVISOR_ROLE_FLAG`). Nothing to do here.
+    #[arg(long, hide = true, global = true)]
+    supervisor: bool,
 }
 
 /// Diagnostic/manual-testing subcommands: a thin one-shot client against a *running* daemon.
@@ -61,6 +65,11 @@ pub enum Command {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    /// Exits 0 if this process may listen for the stop shortcut, 1 if not. Run by a daemon
+    /// waiting for Input Monitoring: a process's answer never changes once asked, so it asks a
+    /// new one. See `stop_key.rs`.
+    #[command(hide = true)]
+    CheckInputMonitoring,
 }
 
 /// Runs the daemon, or the one-shot command on this process's command line.
@@ -78,6 +87,13 @@ pub fn run() -> anyhow::Result<()> {
     match cli.command {
         None => daemon::run(),
         Some(Command::DiagnoseSchedule { path }) => diagnose_schedule(path),
+        Some(Command::CheckInputMonitoring) => {
+            std::process::exit(if shared::input_monitoring::granted() {
+                0
+            } else {
+                1
+            })
+        }
         Some(command) => client::run(command),
     }
 }

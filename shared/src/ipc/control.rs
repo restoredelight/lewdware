@@ -113,6 +113,11 @@ pub enum StopShortcutStatus {
         message: String,
         can_setup: bool,
     },
+    /// macOS: waiting for Input Monitoring permission (`shared::input_monitoring`), without
+    /// which a listener hears nothing. Becomes `Listening` once it's granted.
+    PermissionRequired {
+        message: String,
+    },
     Failed {
         message: String,
     },

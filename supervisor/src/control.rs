@@ -84,6 +84,15 @@ pub enum ControlMessage {
     Stopping {
         stop: LastStop,
     },
+    /// A status subscriber (an open config app) connected or went away. The supervisor stays
+    /// while any is connected, though idle: the app shows what it reports, such as the stop
+    /// shortcut's state.
+    StatusSubscribed,
+    StatusUnsubscribed,
+    /// macOS: Input Monitoring was granted while the stop shortcut waited for it. It only applies
+    /// to a new process, so this one restarts once idle. See `stop_key.rs`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    InputMonitoringGranted,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -197,6 +206,10 @@ pub struct Control {
     tray: TrayUpdater,
     stop_shortcut: crate::stop_key::StopShortcut,
     shortcut_status: shared::ipc::control::StopShortcutStatus,
+    /// Open status subscriptions. While any is open the supervisor doesn't exit idle.
+    status_subscribers: usize,
+    /// Restart as soon as no session is running, to apply Input Monitoring.
+    restart_when_idle: bool,
 }
 
 impl Control {
@@ -220,6 +233,8 @@ impl Control {
             tray,
             stop_shortcut,
             shortcut_status: Default::default(),
+            status_subscribers: 0,
+            restart_when_idle: false,
         }
     }
 
@@ -232,6 +247,9 @@ impl Control {
 
         while let Some(msg) = rx.recv().await {
             self.handle(msg).await;
+            if self.restart_when_idle && self.is_idle() {
+                self.restart();
+            }
             // Every message is a potential state change; `publish_status` dedupes, so
             // over-publishing here is harmless.
             self.publish_status();
@@ -348,7 +366,54 @@ impl Control {
                 }
             }
             ControlMessage::Stopping { stop } => self.stop_now(stop),
+            ControlMessage::StatusSubscribed => self.status_subscribers += 1,
+            ControlMessage::StatusUnsubscribed => {
+                self.status_subscribers = self.status_subscribers.saturating_sub(1);
+                if self.status_subscribers == 0 {
+                    self.arm_idle_timer(self.episode.as_ref().map(|episode| episode.seq));
+                }
+            }
+            ControlMessage::InputMonitoringGranted => {
+                self.restart_when_idle = true;
+                if !self.is_idle() {
+                    self.shortcut_status =
+                        shared::ipc::control::StopShortcutStatus::PermissionRequired {
+                            message: "Input Monitoring is on. The stop shortcut starts working \
+                                      when this session ends."
+                                .into(),
+                        };
+                }
+            }
         }
+    }
+
+    /// No session running or about to start.
+    fn is_idle(&self) -> bool {
+        self.pending_start.is_none()
+            && self
+                .episode
+                .as_ref()
+                .is_none_or(|episode| !episode.is_active())
+    }
+
+    /// Replaces this process with a new supervisor, for permissions that only apply to a new
+    /// process. Same executable and arguments, so it runs as the same app; only called idle, so
+    /// there's no session to lose.
+    fn restart(&mut self) -> ! {
+        tracing::info!("restarting to apply Input Monitoring permission");
+        self.schedule
+            .note_stopping(Local::now(), LastStop::Supervisor);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let error = std::env::current_exe().map(|exe| {
+                std::process::Command::new(exe)
+                    .args(std::env::args_os().skip(1))
+                    .exec()
+            });
+            tracing::error!("couldn't restart: {error:?}");
+        }
+        std::process::exit(1);
     }
 
     fn active_episode(&mut self, seq: u64) -> Option<&mut Episode> {
@@ -731,7 +796,11 @@ impl Control {
         // An enabled schedule needs the supervisor to stay resident, suppressing idle
         // self-termination -- see `reevaluate_schedule`'s explicit re-arm when this stops being
         // true while idle.
-        if currently_idle && seq_matches && !self.schedule.resident_required() {
+        if currently_idle
+            && seq_matches
+            && self.status_subscribers == 0
+            && !self.schedule.resident_required()
+        {
             tracing::info!("no active session for {IDLE_TIMEOUT:?}, exiting");
             // Recorded as *our* stop, not the machine's: the desktop carries on without us, and
             // the hours until the next start say nothing about where the user was. Learning them
@@ -1203,6 +1272,8 @@ mod tests {
             tray: TrayUpdater::for_test(),
             stop_shortcut: crate::stop_key::StopShortcut::for_test(),
             shortcut_status: Default::default(),
+            status_subscribers: 0,
+            restart_when_idle: false,
         }
     }
 

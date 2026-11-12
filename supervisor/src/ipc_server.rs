@@ -1,7 +1,7 @@
 use anyhow::Result;
 use shared::ipc::control::{Request, Response, StatusInfo, control_socket_name};
 use shared::ipc::{Stream, bind_listener, prelude::*};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -54,7 +54,12 @@ async fn handle_connection(
     let req: Request = serde_json::from_str(line.trim_end())?;
 
     match &req {
-        Request::SubscribeStatus => return stream_status(conn, status_rx).await,
+        Request::SubscribeStatus => {
+            let _ = control_tx.send(ControlMessage::StatusSubscribed).await;
+            let result = stream_status(conn, status_rx).await;
+            let _ = control_tx.send(ControlMessage::StatusUnsubscribed).await;
+            return result;
+        }
         Request::SubscribeDevLogs { stream_id } => {
             return stream_dev_logs(conn, dev_log_rx, *stream_id).await;
         }
@@ -96,7 +101,15 @@ async fn stream_dev_logs(
 
 /// Writes the current status immediately, then again on every change, until the subscriber
 /// disconnects. A write failure just means the subscriber went away -- not an error worth logging.
+///
+/// Also watches for the subscriber closing its end, so that it's noticed when it happens rather
+/// than at the next status change: the supervisor stays alive while anyone is subscribed.
 async fn stream_status(conn: Stream, mut status_rx: watch::Receiver<StatusInfo>) -> Result<()> {
+    let mut closed = std::pin::pin!(async {
+        // A subscriber sends nothing after its request, so any read result means it's gone.
+        let mut byte = [0u8; 1];
+        let _ = (&conn).read(&mut byte).await;
+    });
     loop {
         let status = status_rx.borrow_and_update().clone();
         if write_response(&conn, &Response::Status(status))
@@ -105,8 +118,13 @@ async fn stream_status(conn: Stream, mut status_rx: watch::Receiver<StatusInfo>)
         {
             return Ok(());
         }
-        if status_rx.changed().await.is_err() {
-            return Ok(());
+        tokio::select! {
+            changed = status_rx.changed() => {
+                if changed.is_err() {
+                    return Ok(());
+                }
+            }
+            () = &mut closed => return Ok(()),
         }
     }
 }

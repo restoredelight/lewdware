@@ -3,18 +3,19 @@
 
 use anyhow::{anyhow, Context, Result};
 use auto_launch::{AutoLaunchBuilder, MacOSLaunchMode};
-use shared::binaries::find_supervisor_binary_path;
+use shared::binaries::supervisor_autostart_command;
 use shared::ipc::control::{self, Request, Response};
 
 /// The supervisor's "start at login" registration -- the only OS integration scheduling has
 /// (`design/scheduling.md`). Never the engine.
 fn auto_launch() -> Result<auto_launch::AutoLaunch> {
-    let path = find_supervisor_binary_path().ok_or_else(|| {
+    let (path, args) = supervisor_autostart_command().ok_or_else(|| {
         anyhow!("could not find an installed lewdware-supervisor binary to register")
     })?;
     AutoLaunchBuilder::new()
         .set_app_name("Lewdware")
         .set_app_path(&path.to_string_lossy())
+        .set_args(&args)
         .set_macos_launch_mode(MacOSLaunchMode::LaunchAgent)
         .build()
         .context("failed to build autostart registration")
