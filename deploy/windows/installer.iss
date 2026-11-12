@@ -40,7 +40,6 @@ CloseApplications=yes
 RestartApplications=no
 
 ; FFmpeg is linked statically now. Clear out the DLLs earlier versions installed beside the exe.
-; (The pack editor's old separate install, which had its own, is uninstalled in PrepareToInstall.)
 [InstallDelete]
 Type: files; Name: "{app}\avcodec-*.dll"
 Type: files; Name: "{app}\avformat-*.dll"
@@ -142,28 +141,9 @@ begin
   Sleep(500);
 end;
 
-// The pack editor used to have an installer of its own, into {localappdata}\Programs\Lewdware
-// Pack Editor. It is part of this install now, so remove that one, quietly, rather than leave two
-// copies and two Start menu entries. Its uninstaller closes a running editor first, through the
-// Restart Manager, as its installer did.
-procedure UninstallOldPackEditor();
-var
-  Key: String;
-  Uninstaller: String;
-  ResultCode: Integer;
-begin
-  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Lewdware Pack Editor_is1';
-  if RegQueryStringValue(HKEY_CURRENT_USER, Key, 'UninstallString', Uninstaller) then
-  begin
-    Exec(RemoveQuotes(Uninstaller), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE,
-      ewWaitUntilTerminated, ResultCode);
-  end;
-end;
-
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   StopLewdware();
-  UninstallOldPackEditor();
   Result := '';
 end;
 

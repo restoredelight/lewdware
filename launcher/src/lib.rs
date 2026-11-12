@@ -84,6 +84,7 @@ pub fn launch(app: App) -> ! {
 
 fn find_core(exe: &Path) -> Option<PathBuf> {
     let dir = exe.parent()?;
+    #[cfg_attr(windows, allow(unused_mut))] // Windows only looks beside the executable
     let mut candidates = vec![dir.join(CORE)];
 
     #[cfg(all(unix, not(target_os = "macos")))]
