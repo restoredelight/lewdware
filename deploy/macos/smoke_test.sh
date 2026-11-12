@@ -52,6 +52,9 @@ echo "== Config app"
 open "$APP"
 sleep 30
 shot config
+# Which processes macOS treats as apps with a Dock icon: only the config app and the pack
+# editor should be. The supervisor and the engine run as background (accessory) apps.
+lsappinfo list >"$OUT/apps-config.txt" 2>&1
 if running lewdware; then
   echo "config app running"
 else
@@ -85,7 +88,19 @@ MODE="$(pwd)/dev-modes/theme-gallery/build/Theme gallery.lwmode"
 python3 - "$CONFIG" "$OUT/smoke.lwpack" "$MODE" <<'EOF' || fail "couldn't write the config"
 import json, os, sys
 path, pack, mode = sys.argv[1:]
-config = json.load(open(path)) if os.path.exists(path) else {}
+# The config app only writes a config once something changes, so a fresh machine has none.
+config = {
+    "pack_path": None, "uploaded_modes": [], "mode": "Sandbox", "mode_options": [],
+    "stop_button": {
+        "name": "Escape", "code": "Escape",
+        "modifiers": {"alt": False, "ctrl": False, "shift": True, "meta": False},
+    },
+    "disabled_monitors": [],
+    "permissions": {"set_wallpaper": True, "open_links": False, "send_notifications": True},
+    "volume": {"video": 1.0, "audio": 1.0},
+}
+if os.path.exists(path):
+    config.update(json.load(open(path)))
 config.update(pack_path=pack, mode={"File": {"path": mode}}, uploaded_modes=[mode])
 os.makedirs(os.path.dirname(path), exist_ok=True)
 json.dump(config, open(path, "w"), indent=2)
@@ -109,6 +124,7 @@ fi
 "$SUPERVISOR" start || fail "the supervisor didn't start a session"
 sleep 20
 shot session
+lsappinfo list >"$OUT/apps-session.txt" 2>&1
 "$SUPERVISOR" status >"$OUT/status.txt" 2>&1
 cat "$OUT/status.txt"
 if grep -q "Running" "$OUT/status.txt" && running lewdware-engine; then
