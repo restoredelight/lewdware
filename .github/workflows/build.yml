@@ -107,11 +107,19 @@ jobs:
         with:
           submodules: true
 
-      - name: Install brew dependencies
+      # No `brew update`, and as little from Homebrew as possible: on the Intel runners it has no
+      # prebuilt bottles for some of these and compiles them, which took 50 minutes of a 65-minute
+      # job. meson and ninja come prebuilt from pip; cmake is preinstalled on the runners.
+      - name: Install build tools
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
-          brew update
-          brew install nasm cmake ninja meson
-          echo "BREW_DEPS=$(brew ls --versions nasm cmake ninja meson | tr '\n' ' ')" >> $GITHUB_ENV
+          brew list nasm >/dev/null 2>&1 || brew install nasm
+          python3 -m pip install --user --break-system-packages meson ninja
+          echo "$(python3 -m site --user-base)/bin" >> $GITHUB_PATH
+          export PATH="$(python3 -m site --user-base)/bin:$PATH"
+          echo "BREW_DEPS=$(nasm -v | head -1) $(cmake --version | head -1) meson $(meson --version) ninja $(ninja --version)" >> $GITHUB_ENV
       # nasm, cmake, ninja and meson build deploy/build_ffmpeg.sh's static, LGPL-only FFmpeg and
       # its codec libraries (SVT-AV1, Opus, dav1d, libwebp), which the engine and the pack editor
       # link with --features static-ffmpeg; the `image` crate's AVIF decoder links the same static
@@ -145,33 +153,23 @@ jobs:
           name: macos-${{ matrix.arch }}-installers
           path: dist/*
 
-  # Installs the arm64 .pkg on a fresh Apple Silicon runner, which has the Metal the macOS test
-  # VMs lack, and checks the apps and a session run from it. Not a release gate.
-  smoke-test-macos:
-    name: Smoke test macOS (arm64)
-    needs: [build-macos]
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # deploy/vm/make-empty-pack.py needs 3.11+.
-      - uses: actions/setup-python@v7
+      # Installs the arm64 .pkg on this Apple Silicon runner, which has the Metal the macOS test
+      # VMs lack, and checks the apps and a session run from it (deploy/macos/smoke_test.sh).
+      # Here rather than in a job of its own so it doesn't wait for the slower x86_64 build. Not a
+      # release gate: a failure shows as a warning on this step.
+      - name: Set up Python for the smoke test
+        if: matrix.arch == 'arm64'
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
-      - name: Download the arm64 installer
-        uses: actions/download-artifact@v8
-        with:
-          name: macos-arm64-installers
-          path: dist
-
       - name: Smoke test
+        if: matrix.arch == 'arm64'
+        continue-on-error: true
         run: ./deploy/macos/smoke_test.sh dist/*.pkg smoke-test
 
-      - name: Upload screenshots and logs
-        if: always()
+      - name: Upload smoke test screenshots and logs
+        if: always() && matrix.arch == 'arm64'
         uses: actions/upload-artifact@v7
         with:
           name: macos-arm64-smoke-test
