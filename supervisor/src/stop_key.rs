@@ -130,12 +130,7 @@ fn granted_to_a_new_process() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    let mut check = std::process::Command::new(exe);
-    // Run as Lewdware.app's main executable: keep it in the supervisor role.
-    if std::env::args().nth(1).as_deref() == Some(shared::binaries::SUPERVISOR_ROLE_FLAG) {
-        check.arg(shared::binaries::SUPERVISOR_ROLE_FLAG);
-    }
-    check
+    std::process::Command::new(exe)
         .arg("check-input-monitoring")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

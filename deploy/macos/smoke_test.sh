@@ -12,8 +12,9 @@
 set -uo pipefail
 
 PKG="$1"
-OUT="$2"
-mkdir -p "$OUT"
+mkdir -p "$2"
+# Absolute: the test pack's path goes into the config, which the engine reads from elsewhere.
+OUT="$(cd "$2" && pwd)"
 
 APP=/Applications/Lewdware.app
 EDITOR="/Applications/Lewdware Pack Editor.app"

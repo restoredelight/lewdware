@@ -3,19 +3,24 @@
 
 use anyhow::{anyhow, Context, Result};
 use auto_launch::{AutoLaunchBuilder, MacOSLaunchMode};
-use shared::binaries::supervisor_autostart_command;
+use shared::binaries::find_supervisor_binary_path;
 use shared::ipc::control::{self, Request, Response};
 
 /// The supervisor's "start at login" registration -- the only OS integration scheduling has
 /// (`design/scheduling.md`). Never the engine.
 fn auto_launch() -> Result<auto_launch::AutoLaunch> {
-    let (path, args) = supervisor_autostart_command().ok_or_else(|| {
+    let path = find_supervisor_binary_path().ok_or_else(|| {
         anyhow!("could not find an installed lewdware-supervisor binary to register")
     })?;
     AutoLaunchBuilder::new()
         .set_app_name("Lewdware")
         .set_app_path(&path.to_string_lossy())
-        .set_args(&args)
+        // macOS: show the login item as Lewdware (with its icon) in Login Items and the "can run
+        // in the background" notification, not as the bare executable name. Permissions need
+        // nothing extra: the supervisor is inside Lewdware.app, which is what Input Monitoring
+        // is granted to. (It must not run as Lewdware.app's main executable instead: macOS would
+        // then count Lewdware as running, and opening it would only activate the supervisor.)
+        .set_bundle_identifiers(&[shared::MACOS_BUNDLE_ID])
         .set_macos_launch_mode(MacOSLaunchMode::LaunchAgent)
         .build()
         .context("failed to build autostart registration")

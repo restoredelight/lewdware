@@ -96,6 +96,11 @@ jobs:
     strategy:
       matrix:
         include:
+          # Kept mainly so the Intel macOS test VMs can install release packages. GitHub retires
+          # its Intel runners in 2027 and Homebrew no longer ships Intel bottles; before then, build
+          # x86_64 on the arm64 runner instead (cross-compile: CMAKE_OSX_ARCHITECTURES, a meson
+          # cross file and FFmpeg's --enable-cross-compile in deploy/build_ffmpeg.sh and
+          # build_avifenc_sidecar.sh, and `cargo --target x86_64-apple-darwin`), or drop it.
           - runner: macos-15-intel
             arch: x86_64
           - runner: macos-latest

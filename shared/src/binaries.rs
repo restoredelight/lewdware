@@ -198,27 +198,3 @@ pub fn find_supervisor_binary() -> Option<Command> {
 pub fn find_supervisor_binary_path() -> Option<PathBuf> {
     find_installed_path(supervisor_bin_name()).or_else(|| which::which(supervisor_bin_name()).ok())
 }
-
-/// Makes the config app's executable run the supervisor instead (`launcher/src/bin/
-/// launcher-config.rs`). The supervisor accepts and ignores it.
-pub const SUPERVISOR_ROLE_FLAG: &str = "--supervisor";
-
-/// What to register to start the supervisor at login: a program and its arguments.
-///
-/// macOS: Lewdware.app's main executable in the supervisor role, not `lewdware-supervisor`.
-/// Permissions (Input Monitoring, for the stop shortcut) go to the app a process runs as, and a
-/// process launchd starts runs as its own executable unless that's the app's main one. The
-/// supervisor the config app starts runs as Lewdware.app by being its child; started at login as
-/// `lewdware-supervisor` it would need a grant of its own, which nothing asks for.
-pub fn supervisor_autostart_command() -> Option<(PathBuf, Vec<String>)> {
-    #[cfg(target_os = "macos")]
-    if let Some(main) = find_installed_path("lewdware").filter(|path| {
-        // Only inside a bundle: a development build's `lewdware` is the config app alone.
-        path.parent()
-            .filter(|dir| dir.ends_with("Contents/MacOS"))
-            .is_some()
-    }) {
-        return Some((main, vec![SUPERVISOR_ROLE_FLAG.to_owned()]));
-    }
-    find_supervisor_binary_path().map(|path| (path, Vec::new()))
-}

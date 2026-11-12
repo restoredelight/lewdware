@@ -29,10 +29,6 @@ mod wallpaper;
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
-    /// How Lewdware.app's main executable is told to run the supervisor
-    /// (`shared::binaries::SUPERVISOR_ROLE_FLAG`). Nothing to do here.
-    #[arg(long, hide = true, global = true)]
-    supervisor: bool,
 }
 
 /// Diagnostic/manual-testing subcommands: a thin one-shot client against a *running* daemon.
