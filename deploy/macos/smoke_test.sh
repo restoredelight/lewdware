@@ -18,7 +18,7 @@ OUT="$(cd "$2" && pwd)"
 
 APP=/Applications/Lewdware.app
 EDITOR="/Applications/Lewdware Pack Editor.app"
-SUPERVISOR="$APP/Contents/MacOS/lewdware-supervisor"
+SUPERVISOR="$APP/Contents/Helpers/Lewdware Supervisor.app/Contents/MacOS/lewdware-supervisor"
 CONFIG="$HOME/Library/Application Support/lewdware/config.json"
 LOGS="$HOME/Library/Logs/lewdware"
 AGENT=com.lewdware.smoke-test-supervisor

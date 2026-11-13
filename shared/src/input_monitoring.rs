@@ -2,9 +2,10 @@
 //! pressed in other apps. Without it macOS creates the listener but never delivers a key to it,
 //! so the shortcut does nothing and nothing says why.
 //!
-//! macOS grants it to Lewdware.app, which the supervisor and the config app both run as, so the
-//! config app's checks and requests apply to the supervisor too. A grant belongs to one build:
-//! ad-hoc signed updates turn it off again.
+//! It's granted to the supervisor's helper app, "Lewdware Supervisor" (`deploy/macos/
+//! build_installer.sh`), so only the supervisor's own calls mean anything: the config app asks
+//! it (`Request::RequestInputMonitoring`) and shows the status it reports. A grant belongs to one
+//! build: the installer resets it, and ad-hoc signed updates wouldn't match it anyway.
 //!
 //! Elsewhere there's nothing to grant: [`granted`] is always true.
 
@@ -30,9 +31,8 @@ pub fn granted() -> bool {
     true
 }
 
-/// Asks for the permission. The first time, macOS shows its prompt, which also adds Lewdware to
-/// the Input Monitoring list; after that it returns whether it's granted without asking. Call
-/// it on the main thread.
+/// Asks for the permission. The first time per login, macOS shows its prompt, which also adds this
+/// app to the Input Monitoring list; otherwise it just answers whether it's granted.
 pub fn request() -> bool {
     #[cfg(target_os = "macos")]
     // Safety: takes nothing.

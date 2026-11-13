@@ -97,6 +97,16 @@ fn find_core(exe: &Path) -> Option<PathBuf> {
         // dir = X.app/Contents/MacOS
         if let Some(contents) = dir.parent() {
             candidates.push(contents.join("Frameworks").join(CORE));
+            // A helper app inside Lewdware.app (the supervisor's and the engine's):
+            // Lewdware.app/Contents/Helpers/X.app/Contents/MacOS.
+            if let Some(main_contents) = contents
+                .parent()
+                .and_then(Path::parent)
+                .filter(|helpers| helpers.ends_with("Helpers"))
+                .and_then(Path::parent)
+            {
+                candidates.push(main_contents.join("Frameworks").join(CORE));
+            }
             if let Some(folder) = contents.parent().and_then(Path::parent) {
                 candidates.push(
                     folder

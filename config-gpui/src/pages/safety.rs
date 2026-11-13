@@ -7,7 +7,7 @@ use gpui_kit::{
 };
 use shared::user_config::{Permissions, WallpaperRestore};
 
-use crate::backend::wallpaper;
+use crate::backend::{supervisor, wallpaper};
 use crate::keys::key_from_keystroke;
 use crate::runtime;
 use crate::store::{FeedbackKind, Store};
@@ -109,23 +109,23 @@ impl SafetyPage {
         }
     }
 
-    /// macOS shows its own prompt the first time it's asked, and adds Lewdware to the Input
-    /// Monitoring list. After that it only answers, so open the list for the user to switch it on.
-    /// Either way the supervisor notices the grant by itself (`supervisor/src/stop_key.rs`).
+    /// See `supervisor::ask_for_input_monitoring`.
     fn ask_for_input_monitoring(&mut self, cx: &mut Context<Self>) {
-        if shared::input_monitoring::request() {
-            return;
-        }
-        if let Err(error) = shared::input_monitoring::open_settings() {
-            self.store.update(cx, |store, cx| {
-                store.set_feedback(
-                    "input-monitoring",
-                    FeedbackKind::Error,
-                    format!("Couldn't open System Settings: {error}"),
-                );
-                cx.notify();
-            });
-        }
+        let store = self.store.clone();
+        cx.spawn(async move |_, cx| {
+            let result = runtime::run(supervisor::ask_for_input_monitoring()).await;
+            if let Err(error) = result.and_then(|asked| asked) {
+                let _ = store.update(cx, |store, cx| {
+                    store.set_feedback(
+                        "input-monitoring",
+                        FeedbackKind::Error,
+                        format!("Couldn't open System Settings: {error:#}"),
+                    );
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -387,7 +387,8 @@ impl SafetyPage {
                         )
                         .child(
                             "In System Settings, under Privacy & Security, Input Monitoring, \
-                             turn on Lewdware. If it isn't listed, add it with +. The shortcut \
+                             turn on Lewdware Supervisor. If it isn't listed, add it with +: \
+                             it's inside Lewdware, under Contents/Helpers. The shortcut \
                              starts working as soon as it's on; there's no need to restart \
                              Lewdware.",
                         ),

@@ -4,10 +4,15 @@
 #
 #   Lewdware.app/Contents/
 #     MacOS/lewdware                     the config app's launcher (the bundle's executable)
-#     MacOS/lewdware-engine              the engine's launcher, started by the supervisor
-#     MacOS/lewdware-supervisor          the supervisor's launcher
 #     MacOS/lw                           the CLI, its own program
 #     Frameworks/liblewdware_core.dylib  every app but lw, FFmpeg statically linked in
+#     Helpers/Lewdware Supervisor.app    the supervisor's launcher, as a background app
+#     Helpers/Lewdware Engine.app        the engine's launcher, as a background app
+#
+# The supervisor and the engine are helper apps of their own because macOS counts any app-like
+# process running from Lewdware.app's bundle as Lewdware: while one ran without the config app,
+# opening Lewdware only brought it forward, and no window opened. The supervisor's helper is also
+# the app that Input Monitoring is granted to, for the stop shortcut (shared/src/input_monitoring.rs).
 #   Lewdware Pack Editor.app/Contents/
 #     MacOS/lewdware-pack-editor         the pack editor's launcher, which loads the core above
 #     Resources/binaries/lewdware-avifenc
@@ -67,9 +72,17 @@ make_app_bundle "$APP_DIR" "target/release/launcher-config" \
   lewdware "$APP_NAME" "$BUNDLE_ID" "$VERSION"
 
 MAC_BIN_DIR="$APP_DIR/Contents/MacOS"
-cp "target/release/launcher-engine" "$MAC_BIN_DIR/lewdware-engine"
-cp "target/release/launcher-supervisor" "$MAC_BIN_DIR/lewdware-supervisor"
 cp "target/release/lw" "$MAC_BIN_DIR/lw"
+
+# The supervisor's and the engine's helper apps. Their launchers find the core in Lewdware.app's
+# Frameworks (launcher/src/lib.rs), and the apps find them here (shared/src/binaries.rs).
+HELPERS_DIR="$APP_DIR/Contents/Helpers"
+SUPERVISOR_APP="$HELPERS_DIR/Lewdware Supervisor.app"
+ENGINE_APP="$HELPERS_DIR/Lewdware Engine.app"
+make_app_bundle "$SUPERVISOR_APP" "target/release/launcher-supervisor" \
+  lewdware-supervisor "Lewdware Supervisor" "$BUNDLE_ID.supervisor" "$VERSION" background
+make_app_bundle "$ENGINE_APP" "target/release/launcher-engine" \
+  lewdware-engine "Lewdware Engine" "$BUNDLE_ID.engine" "$VERSION" background
 chmod +x "$MAC_BIN_DIR/"*
 cp "target/release/liblewdware_core.dylib" "$APP_DIR/Contents/Frameworks/liblewdware_core.dylib"
 
@@ -106,11 +119,14 @@ cp "pack-editor-gpui/COPYING.LGPLv2.1" "$EDITOR_RESOURCES/COPYING.LGPLv2.1"
 # static-ffmpeg feature above), so they won't show up here.
 echo "Resolving dynamic library dependencies..."
 bundle_dylibs "$APP_DIR" "$APP_DIR/Contents/Frameworks/liblewdware_core.dylib"
-for bin in lewdware lewdware-engine lewdware-supervisor lw; do
+for bin in lewdware lw; do
   bundle_dylibs "$APP_DIR" "$MAC_BIN_DIR/$bin"
 done
 bundle_dylibs "$EDITOR_DIR" "$EDITOR_DIR/Contents/MacOS/lewdware-pack-editor"
 
+# Nested code first: signing Lewdware.app seals its contents, the helpers included.
+sign_app "$SUPERVISOR_APP"
+sign_app "$ENGINE_APP"
 sign_app "$APP_DIR"
 sign_app "$EDITOR_DIR"
 
@@ -119,7 +135,7 @@ echo "📝 Creating installer preinstall script..."
 cat << 'EOF' > "$BUILD_DIR/scripts/preinstall"
 #!/bin/bash
 # Stop a running Lewdware before the installer replaces its binaries underneath it.
-SUPERVISOR="/Applications/Lewdware.app/Contents/MacOS/lewdware-supervisor"
+SUPERVISOR="/Applications/Lewdware.app/Contents/Helpers/Lewdware Supervisor.app/Contents/MacOS/lewdware-supervisor"
 
 # Installer scripts run as root, but on macOS the supervisor's control socket is a filesystem
 # socket under env::temp_dir() (shared/src/ipc.rs -- the abstract namespace it uses on Linux
@@ -145,9 +161,10 @@ fi
 #
 # A running pack editor is left alone: it may have unsaved work, and it keeps the old core it
 # already loaded until it is closed.
-for image in lewdware-engine lewdware-supervisor lewdware; do
-  pkill -x "$image" >/dev/null 2>&1 || true
-done
+# By path, not name: macOS cuts process names to 16 characters, so `pkill -x
+# lewdware-supervisor` never matched. Everything running from Lewdware.app: the config app, the
+# supervisor and the engine (their helper apps are inside it).
+pkill -f "^/Applications/Lewdware.app/Contents/" >/dev/null 2>&1 || true
 
 # Never fail the install over this.
 exit 0
@@ -170,6 +187,7 @@ chmod +x "$TARGET_BIN"
 
 echo "Resetting TCC permissions..."
 tccutil reset All com.lewdware || true
+tccutil reset All com.lewdware.supervisor || true
 
 exit 0
 EOF

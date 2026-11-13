@@ -4,13 +4,17 @@
 # have no bundler, so this writes what Tauri's used to: the Info.plist, the icon, and the
 # non-system dylibs under Contents/Frameworks.
 
-# make_app_bundle APP_DIR EXECUTABLE_SRC EXECUTABLE_NAME DISPLAY_NAME BUNDLE_ID VERSION
+# make_app_bundle APP_DIR EXECUTABLE_SRC EXECUTABLE_NAME DISPLAY_NAME BUNDLE_ID VERSION [background]
+#
+# `background` makes an agent app (LSUIElement): no Dock icon or menu bar of its own.
 #
 # The bundle id matters beyond the plist: macOS keys privacy permissions (Input Monitoring,
 # Accessibility) on it, so keep it stable across releases. The config app's is `com.lewdware`, as
 # the Tauri build's was, which keeps existing grants.
 make_app_bundle() {
   local app="$1" exe_src="$2" exe_name="$3" display_name="$4" bundle_id="$5" version="$6"
+  local agent=""
+  [[ "${7:-}" == background ]] && agent="<key>LSUIElement</key><true/>"
   rm -rf "$app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
   cp "$exe_src" "$app/Contents/MacOS/$exe_name"
@@ -34,6 +38,7 @@ make_app_bundle() {
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>LSMinimumSystemVersion</key><string>10.15.7</string>
   <key>NSHighResolutionCapable</key><true/>
+  ${agent}
 </dict>
 </plist>
 PLIST

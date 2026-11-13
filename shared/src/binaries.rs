@@ -94,6 +94,27 @@ fn loaded_from(address: *const ()) -> Option<PathBuf> {
     }
 }
 
+/// macOS: the helper app inside Lewdware.app (`Contents/Helpers/<name>.app`) that a program
+/// runs from, for those that aren't Lewdware.app's own executable. Each is its own app to the
+/// system: run from Lewdware.app, macOS would count them as Lewdware, and opening Lewdware while
+/// one ran would only bring it forward instead of opening the window. See
+/// `deploy/macos/build_installer.sh`.
+#[cfg(target_os = "macos")]
+fn macos_helper_app(bin_name: &str) -> Option<&'static str> {
+    match bin_name {
+        "lewdware-supervisor" => Some("Lewdware Supervisor"),
+        "lewdware-engine" => Some("Lewdware Engine"),
+        _ => None,
+    }
+}
+
+/// macOS: the helper app bundle `exe` is the executable of, if it is one.
+#[cfg(target_os = "macos")]
+pub fn enclosing_helper_app(exe: &std::path::Path) -> Option<PathBuf> {
+    let app = exe.parent()?.parent()?.parent()?;
+    (app.extension()? == "app" && app.parent()?.file_name()? == "Helpers").then(|| app.to_owned())
+}
+
 fn candidates_for(bin_name: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -102,6 +123,15 @@ fn candidates_for(bin_name: &str) -> Vec<PathBuf> {
         candidates.push(dir.join(bin_name));
         #[cfg(target_os = "macos")]
         if let Some(contents) = dir.parent() {
+            if let Some(helper) = macos_helper_app(bin_name) {
+                candidates.push(
+                    contents
+                        .join("Helpers")
+                        .join(format!("{helper}.app"))
+                        .join("Contents/MacOS")
+                        .join(bin_name),
+                );
+            }
             candidates.push(contents.join("MacOS").join(bin_name));
         }
         #[cfg(all(unix, not(target_os = "macos")))]
@@ -189,6 +219,15 @@ pub fn find_config_binary() -> Option<Command> {
         "lewdware"
     };
     find_binary(bin_name, "lewdware-config")
+}
+
+/// The installed config app's executable, if there is one (no development fallback).
+pub fn find_config_binary_path() -> Option<PathBuf> {
+    find_installed_path(if cfg!(windows) {
+        "lewdware.exe"
+    } else {
+        "lewdware"
+    })
 }
 
 pub fn find_supervisor_binary() -> Option<Command> {

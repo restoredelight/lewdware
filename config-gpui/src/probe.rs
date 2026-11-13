@@ -18,9 +18,11 @@
 //!                           window does (which keeps it running), logging each change
 //!   wait-shortcut KIND SECS follow until the stop shortcut's status is KIND (`Listening`,
 //!                           `PermissionRequired`, ...), or fail after SECS
-//!   permission              whether this process has Input Monitoring
-//!   request-permission      what "Open settings" does first: macOS's prompt
-//!   open-settings           what "Open settings" does after: System Settings' list
+//!   permission              whether this process has Input Monitoring (on macOS it's the
+//!                           supervisor's to have; this is for comparison)
+//!   request-permission      the "Open settings" button: asks the supervisor, which shows
+//!                           macOS's prompt the first time, else opens System Settings
+//!   open-settings           System Settings' Input Monitoring list alone
 //!   autostart on|off        register or remove the supervisor's start-at-login
 //!   sleep SECONDS
 //!
@@ -73,16 +75,8 @@ fn run(script: &Path, log: &Path) -> Result<bool> {
         }
         log.line(&format!("> {step}"));
         let words: Vec<&str> = step.split_whitespace().collect();
-        // Permission calls stay on this, the main, thread, where macOS wants them.
         let result = match words.as_slice() {
             ["permission"] => Ok(format!("granted: {}", shared::input_monitoring::granted())),
-            ["request-permission"] => {
-                let granted = shared::input_monitoring::request();
-                // The real app's main thread runs gpui's run loop, which macOS may need to show
-                // the prompt; run one for a moment, as it would.
-                spin_run_loop(Duration::from_secs(5));
-                Ok(format!("granted: {granted}"))
-            }
             ["open-settings"] => shared::input_monitoring::open_settings()
                 .map(|()| "opened".into())
                 .map_err(Into::into),
@@ -111,6 +105,9 @@ async fn async_step(words: &[&str], log: &mut Log) -> Result<String> {
             None => "no supervisor running".into(),
         }),
         ["launch"] => supervisor::launch().await.map(|()| "launched".into()),
+        ["request-permission"] => supervisor::ask_for_input_monitoring()
+            .await
+            .map(|()| "asked the supervisor (and opened settings if not granted)".into()),
         ["stop"] => {
             supervisor::stop().await;
             Ok("asked to stop".into())
@@ -179,21 +176,6 @@ fn describe(info: &StatusInfo) -> String {
     let session = format!("{:?}", info.session);
     let session = session.split([' ', '{']).next().unwrap_or_default();
     format!("session {session}, stop shortcut {:?}", info.stop_shortcut)
-}
-
-fn spin_run_loop(duration: Duration) {
-    #[cfg(target_os = "macos")]
-    {
-        #[link(name = "CoreFoundation", kind = "framework")]
-        unsafe extern "C" {
-            static kCFRunLoopDefaultMode: *const std::ffi::c_void;
-            fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, once: u8) -> i32;
-        }
-        // Safety: runs this thread's run loop in the default mode.
-        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, duration.as_secs_f64(), 0) };
-    }
-    #[cfg(not(target_os = "macos"))]
-    std::thread::sleep(duration);
 }
 
 struct Log(std::fs::File);

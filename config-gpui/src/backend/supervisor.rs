@@ -65,6 +65,20 @@ pub async fn launch() -> anyhow::Result<()> {
     }
 }
 
+/// The "Open settings" button: asks the supervisor for Input Monitoring (it's the app that holds
+/// it), which shows macOS's prompt the first time; if that doesn't grant it, opens System
+/// Settings' list for the user to switch it on. The supervisor notices the grant by itself.
+pub async fn ask_for_input_monitoring() -> anyhow::Result<()> {
+    let granted = matches!(
+        control::request(&Request::RequestInputMonitoring).await,
+        Ok(Response::Ok)
+    );
+    if !granted {
+        shared::input_monitoring::open_settings()?;
+    }
+    Ok(())
+}
+
 /// Best-effort: with no supervisor reachable there is nothing running to stop.
 pub async fn stop() {
     let _ = control::request(&Request::StopSession).await;

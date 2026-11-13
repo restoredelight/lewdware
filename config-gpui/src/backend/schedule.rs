@@ -15,11 +15,8 @@ fn auto_launch() -> Result<auto_launch::AutoLaunch> {
     AutoLaunchBuilder::new()
         .set_app_name("Lewdware")
         .set_app_path(&path.to_string_lossy())
-        // macOS: show the login item as Lewdware (with its icon) in Login Items and the "can run
-        // in the background" notification, not as the bare executable name. Permissions need
-        // nothing extra: the supervisor is inside Lewdware.app, which is what Input Monitoring
-        // is granted to. (It must not run as Lewdware.app's main executable instead: macOS would
-        // then count Lewdware as running, and opening it would only activate the supervisor.)
+        // macOS: the supervisor is its own helper app inside Lewdware.app (shared/src/
+        // binaries.rs); this groups its login item under Lewdware in Login Items.
         .set_bundle_identifiers(&[shared::MACOS_BUNDLE_ID])
         .set_macos_launch_mode(MacOSLaunchMode::LaunchAgent)
         .build()

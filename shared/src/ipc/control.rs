@@ -53,6 +53,11 @@ pub enum Request {
     /// engine -- how a config-app edit reaches an already-resident supervisor (`design/
     /// scheduling.md`'s schedule vocabulary).
     ReloadConfig,
+    /// macOS: asks for Input Monitoring, which the stop shortcut needs (`shared::input_monitoring`),
+    /// from the supervisor, the app it's granted to. `Ok` if granted, `Error` if not yet: macOS
+    /// shows its prompt the first time it's asked, and otherwise the user has to be sent to
+    /// System Settings. Answers `Ok` elsewhere.
+    RequestInputMonitoring,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -315,15 +320,10 @@ pub async fn ensure_supervisor_running() -> Result<()> {
         return Ok(());
     }
 
-    let mut cmd = crate::binaries::find_supervisor_binary()
-        .ok_or_else(|| anyhow!("could not find the lewdware-supervisor binary"))?;
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    silence_command(&mut cmd);
-    cmd.spawn().context("could not spawn the supervisor")?;
+    spawn_supervisor()?;
 
-    for _ in 0..40 {
+    // Up to 10s: through LaunchServices (macOS) a start takes a few seconds on a slow machine.
+    for _ in 0..200 {
         tokio::time::sleep(Duration::from_millis(50)).await;
         if request(&Request::Status).await.is_ok() {
             return Ok(());
@@ -331,6 +331,35 @@ pub async fn ensure_supervisor_running() -> Result<()> {
     }
 
     Err(anyhow!("supervisor did not become reachable"))
+}
+
+fn spawn_supervisor() -> Result<()> {
+    // macOS: an installed supervisor is its own helper app, and is started as one, through
+    // LaunchServices, rather than as our child. A child would count as the starting app for
+    // permissions, so Input Monitoring granted to Lewdware Supervisor wouldn't apply to it, while
+    // the one the login item starts would be Lewdware Supervisor. `-n`: a new instance even if
+    // one is registered but unreachable; `-g`: in the background.
+    #[cfg(target_os = "macos")]
+    if let Some(app) = crate::binaries::find_supervisor_binary_path()
+        .and_then(|exe| crate::binaries::enclosing_helper_app(&exe))
+    {
+        let status = std::process::Command::new("/usr/bin/open")
+            .args(["-n", "-g"])
+            .arg(&app)
+            .status()
+            .context("could not start the supervisor")?;
+        anyhow::ensure!(status.success(), "could not start {}", app.display());
+        return Ok(());
+    }
+
+    let mut cmd = crate::binaries::find_supervisor_binary()
+        .ok_or_else(|| anyhow!("could not find the lewdware-supervisor binary"))?;
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    silence_command(&mut cmd);
+    cmd.spawn().context("could not spawn the supervisor")?;
+    Ok(())
 }
 
 #[cfg(test)]

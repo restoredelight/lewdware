@@ -482,6 +482,15 @@ impl Control {
                 self.stop_shortcut.refresh();
                 Response::Ok
             }
+            Request::RequestInputMonitoring => {
+                if shared::input_monitoring::request() {
+                    Response::Ok
+                } else {
+                    Response::Error {
+                        message: "Input Monitoring isn't granted yet".into(),
+                    }
+                }
+            }
             // Handled asynchronously in `handle`, keeping emergency-stop delivery responsive.
             Request::SetupStopShortcut | Request::ConfigureStopShortcut => Response::Error {
                 message: "Shortcut setup requires a one-shot control request".into(),
@@ -1086,6 +1095,22 @@ impl Control {
 /// running -- which raises and focuses its window -- and then exits. The supervisor needs no
 /// bookkeeping of its own, and this focuses a window the *user* opened, not just one the tray did.
 fn open_config() {
+    // macOS: open Lewdware.app as the system does, which raises it if it's running. Spawned as
+    // our child, it would count as part of the supervisor's helper app.
+    #[cfg(target_os = "macos")]
+    if let Some(app) = shared::binaries::find_config_binary_path()
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .and_then(std::path::Path::parent)
+        .filter(|app| app.extension().is_some_and(|ext| ext == "app"))
+    {
+        if let Err(err) = std::process::Command::new("/usr/bin/open").arg(app).spawn() {
+            tracing::warn!("could not open {}: {err}", app.display());
+        }
+        return;
+    }
+
     match shared::binaries::find_config_binary() {
         Some(mut cmd) => {
             if let Err(err) = cmd.spawn() {
